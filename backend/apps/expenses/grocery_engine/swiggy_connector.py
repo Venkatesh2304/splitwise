@@ -2,7 +2,7 @@ import requests
 import json
 from typing import List, Dict, Any, Optional
 from .base_connector import BaseGroceryConnector, GroceryOrder, GroceryItem
-from .state import SWIGGY_OAUTH_STATE
+from .state import get_swiggy_session
 
 MCP_BASE = "https://mcp.swiggy.com"
 
@@ -27,15 +27,29 @@ class SwiggyInstamartConnector(BaseGroceryConnector):
         return "SWIGGY_INSTAMART"
 
     def get_auth_status(self, user_context: Optional[Any] = None) -> Dict[str, Any]:
-        token = SWIGGY_OAUTH_STATE.get("access_token")
+        phone_number = None
+        if isinstance(user_context, dict):
+            phone_number = user_context.get("phone_number") or user_context.get("phone")
+        elif hasattr(user_context, "phone_number"):
+            phone_number = getattr(user_context, "phone_number", None)
+
+        session = get_swiggy_session(phone_number)
+        token = session.get("access_token")
         return {
             "platform": self.platform_name,
             "is_logged_in": bool(token),
-            "phone_number": "9965817968" if token else None
+            "phone_number": session.get("phone_number") if token else None
         }
 
     def fetch_orders(self, force_refresh: bool = False, user_context: Optional[Any] = None) -> List[GroceryOrder]:
-        token = SWIGGY_OAUTH_STATE.get("access_token")
+        phone_number = None
+        if isinstance(user_context, dict):
+            phone_number = user_context.get("phone_number") or user_context.get("phone")
+        elif hasattr(user_context, "phone_number"):
+            phone_number = getattr(user_context, "phone_number", None)
+
+        session = get_swiggy_session(phone_number)
+        token = session.get("access_token")
         if not token:
             return []
 

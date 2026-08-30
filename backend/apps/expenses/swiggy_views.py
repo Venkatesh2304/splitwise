@@ -9,7 +9,11 @@ from rest_framework import status
 
 from apps.expenses.models import Expense
 from apps.expenses.grocery_engine import GrocerySplitEngine
-from apps.expenses.grocery_engine.state import SWIGGY_OAUTH_STATE, SWIGGY_ORDER_CACHE, CACHE_TTL_SECONDS
+from apps.expenses.grocery_engine.state import (
+    get_swiggy_session,
+    get_swiggy_order_cache,
+    CACHE_TTL_SECONDS
+)
 
 MCP_BASE = "https://mcp.swiggy.com"
 
@@ -28,12 +32,13 @@ def clean_placed_at(status_text):
 
 @api_view(['GET'])
 def swiggy_status(request):
-    is_logged = bool(SWIGGY_OAUTH_STATE.get("access_token"))
-    phone = request.query_params.get("phone") or SWIGGY_OAUTH_STATE.get("phone_number", "9965817968")
+    phone = request.query_params.get("phone") or request.query_params.get("phone_number")
+    session = get_swiggy_session(phone)
+    is_logged = bool(session.get("access_token"))
     return Response({
         "is_logged_in": is_logged,
-        "phone_number": phone,
-        "access_token": SWIGGY_OAUTH_STATE.get("access_token")
+        "phone_number": session.get("phone_number"),
+        "access_token": session.get("access_token")
     }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
@@ -43,36 +48,46 @@ def swiggy_send_otp(request):
     if not phone_number or len(phone_number) < 10:
         return Response({"error": "Invalid phone number.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
 
-    SWIGGY_OAUTH_STATE["phone_number"] = phone_number
+    session = get_swiggy_session(phone_number)
+    session["phone_number"] = phone_number
     return Response({"message": f"OTP sent to {phone_number} via SMS.", "success": True, "ok": True}, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 def swiggy_verify_otp(request):
+    raw_phone = request.data.get("phone_number") or request.data.get("phone") or ""
+    phone_number = str(raw_phone).strip()
+    session = get_swiggy_session(phone_number)
     otp = str(request.data.get("otp") or request.data.get("code") or "").strip()
+
     if not otp:
         return Response({"error": "OTP is required.", "ok": False, "success": False}, status=status.HTTP_400_BAD_REQUEST)
 
-    if not SWIGGY_OAUTH_STATE.get("access_token"):
-        SWIGGY_OAUTH_STATE["access_token"] = "eyJLSUQiOiIyIiwidHlwIjoiSldUIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiIzNGE0Yjk0OS0wMDI5LTQ0MzYtODZkMy01ODA0NGJiOTI1YzUiLCJ1c2VyX2lkIjoiMTM0MjA4OTUiLCJzZXNzaW9uX2RhdGEiOiIxekZobWlndklSOHBnc2lKUlBYWTRXVTNQeWRMeEdpaXMyWjdOWjBWdXRUYWJaLy9ncUJLaUJUMEJkZ2NHTFRHYjA3ZVozdmZpRWVnWklMdkpubEgveHF1cDl6OCtLc2tDSTBmbmdESDNSY0hMM2dTcXFJZGhSKzdCL2JVUlQ0VzZ0YnRHbXZWQXk5a1lqc291OEVsQWxhcU00eUE5NTFUeGtYNXZBNXcyS0NYTEc4aGRKRHZvS3k5ZnQzUlE4blozWVVwYk1WZVZtZWZubUc3dmU5ZVliK0lyaHhDd25taTltME5yMkxWZlZ3WitGN1U0ZmNrc0JyT0cxZVdGWk1yelpVWkNlczBtZCt2emJiN2VxdFIyWjJWZEVUcGNqTThpMmU3T0I0ZzhWMi83WkxnaER3QllMR1F1TFExYVhNSGFoYWNZdWZJN2p1SHF0S0ZmQThSWkdyT0VrL1BzdnA0QW5rVEd2Q0d4eWFwYTgvS0Qyc0RYUC9LV0RjVVQvbmx0anNjZTZZbEp6bGR0WWp6ZjZEWEdLWDRjckhFUGk2Y0ZVdk1EaU4yU2x4ZUpzVkN5RDljVk0wbElIRmE0NzRBMXNxelk4VFcveVF5VDFKZDk4TFoiLCJzaWQiOiJ0Y2k0NzVkMGM1OS1iNDQ0LTRiNmUtODcxMS0xZWVhNzZjZWMiLCJpYXQiOjE3ODgwOTU3NjUsImV4cCI6MTc4ODUyNzc2NSwidG9rZW5fdHlwZSI6Im1jcCJ9.CN0jvzWtDK_xKD_cEPVw9S2-wmsH4J9CrNnUCW4Lvag"
+    if not session.get("access_token"):
+        session["access_token"] = "eyJLSUQiOiIyIiwidHlwIjoiSldUIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiIzNGE0Yjk0OS0wMDI5LTQ0MzYtODZkMy01ODA0NGJiOTI1YzUiLCJ1c2VyX2lkIjoiMTM0MjA4OTUiLCJzZXNzaW9uX2RhdGEiOiIxekZobWlndklSOHBnc2lKUlBYWTRXVTNQeWRMeEdpaXMyWjdOWjBWdXRUYWJaLy9ncUJLaUJUMEJkZ2NHTFRHYjA3ZVozdmZpRWVnWklMdkpubEgveHF1cDl6OCtLc2tDSTBmbmdESDNSY0hMM2dTcXFJZGhSKzdCL2JVUlQ0VzZ0YnRHbXZWQXk5a1lqc291OEVsQWxhcU00eUE5NTFUeGtYNXZBNXcyS0NYTEc4aGRKRHZvS3k5ZnQzUlE4blozWVVwYk1WZVZtZWZubUc3dmU5ZVliK0lyaHhDd25taTltME5yMkxWZlZ3WitGN1U0ZmNrc0JyT0cxZVdGWk1yelpVWkNlczBtZCt2emJiN2VxdFIyWjJWZEVUcGNqTThpMmU3T0I0ZzhWMi83WkxnaER3QllMR1F1TFExYVhNSGFoYWNZdWZJN2p1SHF0S0ZmQThSWkdyT0VrL1BzdnA0QW5rVEd2Q0d4eWFwYTgvS0Qyc0RYUC9LV0RjVVQvbmx0anNjZTZZbEp6bGR0WWp6ZjZEWEdLWDRjckhFUGk2Y0ZVdk1EaU4yU2x4ZUpzVkN5RDljVk0wbElIRmE0NzRBMXNxelk4VFcveVF5VDFKZDk4TFoiLCJzaWQiOiJ0Y2k0NzVkMGM1OS1iNDQ0LTRiNmUtODcxMS0xZWVhNzZjZWMiLCJpYXQiOjE3ODgwOTU3NjUsImV4cCI6MTc4ODUyNzc2NSwidG9rZW5fdHlwZSI6Im1jcCJ9.CN0jvzWtDK_xKD_cEPVw9S2-wmsH4J9CrNnUCW4Lvag"
 
     return Response({
         "message": "Successfully authenticated with Swiggy Instamart!",
         "ok": True,
         "success": True,
-        "session": SWIGGY_OAUTH_STATE
+        "session": session
     }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 def swiggy_logout(request):
-    SWIGGY_OAUTH_STATE["access_token"] = None
-    SWIGGY_ORDER_CACHE["data"] = None
+    raw_phone = request.data.get("phone_number") or request.data.get("phone") or ""
+    session = get_swiggy_session(raw_phone)
+    cache = get_swiggy_order_cache(raw_phone)
+    session["access_token"] = None
+    cache["data"] = None
     return Response({"message": "Logged out from Swiggy Instamart."}, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 def swiggy_auth_url(request):
+    phone = request.query_params.get("phone") or request.query_params.get("phone_number") or "6382247549"
+    session = get_swiggy_session(phone)
     host = request.get_host()
     scheme = request.scheme
-    redirect_uri = f"{scheme}://{host}/api/swiggy/callback/"
+    redirect_uri = f"{scheme}://{host}/api/swiggy/callback/?phone={phone}"
     client_id = "swiggy-mcp"
     state = "splitwise_state_123"
     code_challenge = "anMh43oX8zlz5C87l0r9J9XOVaNaKWqDwB0TjTj7fdo"
@@ -87,10 +102,12 @@ def swiggy_auth_url(request):
         f"state={state}&"
         f"scope=mcp:tools"
     )
-    return Response({"auth_url": url, "is_logged_in": bool(SWIGGY_OAUTH_STATE["access_token"])})
+    return Response({"auth_url": url, "is_logged_in": bool(session.get("access_token"))})
 
 @api_view(['GET'])
 def swiggy_callback(request):
+    phone = request.query_params.get("phone") or "6382247549"
+    session = get_swiggy_session(phone)
     code = request.query_params.get("code")
     if not code:
         return Response({"error": "No authorization code provided."}, status=status.HTTP_400_BAD_REQUEST)
@@ -98,12 +115,12 @@ def swiggy_callback(request):
     token_url = f"{MCP_BASE}/auth/token"
     host = request.get_host()
     scheme = request.scheme
-    redirect_uri = f"{scheme}://{host}/api/swiggy/callback/"
+    redirect_uri = f"{scheme}://{host}/api/swiggy/callback/?phone={phone}"
 
     payload = {
         "grant_type": "authorization_code",
         "code": code,
-        "code_verifier": SWIGGY_OAUTH_STATE["code_verifier"],
+        "code_verifier": session.get("code_verifier", "SEFa4u3Kq9q9lkApAawhFbyZ-Te3pl54RMrlm5NKqa4"),
         "redirect_uri": redirect_uri
     }
 
@@ -111,11 +128,11 @@ def swiggy_callback(request):
         res = requests.post(token_url, json=payload, timeout=10.0)
         data = res.json()
         if res.status_code == 200 and data.get("access_token"):
-            SWIGGY_OAUTH_STATE["access_token"] = data.get("access_token")
-            SWIGGY_OAUTH_STATE["refresh_token"] = data.get("refresh_token")
+            session["access_token"] = data.get("access_token")
+            session["refresh_token"] = data.get("refresh_token")
             
             # Immediately fetch & sync Swiggy orders
-            fetch_swiggy_orders_internal(force_refresh=True)
+            fetch_swiggy_orders_internal(phone_number=phone, force_refresh=True)
 
             server_name = request.META.get('HTTP_HOST', 'localhost').split(':')[0]
             frontend_port = '5001' if str(request.get_port()) == '5002' else '5173'
@@ -127,14 +144,16 @@ def swiggy_callback(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-def fetch_swiggy_orders_internal(force_refresh=False):
-    token = SWIGGY_OAUTH_STATE.get("access_token")
+def fetch_swiggy_orders_internal(phone_number=None, force_refresh=False):
+    session = get_swiggy_session(phone_number)
+    cache = get_swiggy_order_cache(phone_number)
+    token = session.get("access_token")
     if not token:
         return []
 
     now = time.time()
-    if not force_refresh and SWIGGY_ORDER_CACHE["data"] and (now - SWIGGY_ORDER_CACHE["timestamp"] < CACHE_TTL_SECONDS):
-        return SWIGGY_ORDER_CACHE["data"]
+    if not force_refresh and cache.get("data") and (now - cache.get("timestamp", 0) < CACHE_TTL_SECONDS):
+        return cache["data"]
 
     headers = {
         "Authorization": f"Bearer {token}",
@@ -206,13 +225,14 @@ def fetch_swiggy_orders_internal(force_refresh=False):
     except Exception:
         orders_list = []
 
-    SWIGGY_ORDER_CACHE["data"] = orders_list
-    SWIGGY_ORDER_CACHE["timestamp"] = now
+    cache["data"] = orders_list
+    cache["timestamp"] = now
     return orders_list
 
 @api_view(['GET'])
 def swiggy_orders(request):
-    orders_list = fetch_swiggy_orders_internal(force_refresh=request.query_params.get("refresh") == "true")
+    phone = request.query_params.get("phone") or request.query_params.get("phone_number")
+    orders_list = fetch_swiggy_orders_internal(phone_number=phone, force_refresh=request.query_params.get("refresh") == "true")
     output_orders = []
     for ord_item in orders_list:
         ord_id = str(ord_item.get("order_id", ""))
@@ -251,8 +271,10 @@ def swiggy_orders(request):
 
 @api_view(['POST'])
 def swiggy_order_cart_details(request):
+    phone = request.data.get("phone") or request.data.get("phone_number")
     order_id = request.data.get("order_id")
-    orders_list = SWIGGY_ORDER_CACHE.get("data") or []
+    cache = get_swiggy_order_cache(phone)
+    orders_list = cache.get("data") or []
     target_ord = next((o for o in orders_list if str(o.get("order_id")) == str(order_id)), None)
 
     if not target_ord:

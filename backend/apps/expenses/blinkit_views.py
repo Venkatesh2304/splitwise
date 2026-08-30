@@ -11,15 +11,38 @@ from apps.groups.models import Group
 from apps.users.models import UserProfile
 from apps.expenses.models import Expense, ExpensePayer, ExpenseShare
 from apps.expenses.grocery_engine import GrocerySplitEngine
-from apps.expenses.grocery_engine.state import BLINKIT_SESSION, BLINKIT_ORDER_CACHE, CACHE_TTL_SECONDS
+from apps.expenses.grocery_engine.state import (
+    get_blinkit_session,
+    get_blinkit_order_cache,
+    CACHE_TTL_SECONDS
+)
 
 REQ_KEY = "c0e6868e-1180-400c-be51-f473479f1f0a"
 
-def get_blinkit_api_headers(include_auth_key=True):
-    if not BLINKIT_SESSION.get("device_id"):
-        BLINKIT_SESSION["device_id"] = uuid.uuid4().hex[:16]
-    if not BLINKIT_SESSION.get("session_uuid"):
-        BLINKIT_SESSION["session_uuid"] = str(uuid.uuid4())
+def get_user_profile_by_req(request, phone_override=None):
+    if phone_override:
+        u = UserProfile.objects.filter(phone_number=str(phone_override).strip()).first()
+        if u: return u
+
+    user_id = request.headers.get("X-User-Id") or request.query_params.get("user_id") or request.data.get("user_id")
+    if user_id:
+        u = UserProfile.objects.filter(id=user_id).first()
+        if u: return u
+
+    phone = request.headers.get("X-Phone-Number") or request.query_params.get("phone") or request.query_params.get("phone_number") or request.data.get("phone") or request.data.get("phone_number")
+    if phone:
+        u = UserProfile.objects.filter(phone_number=str(phone).strip()).first()
+        if u: return u
+
+    return UserProfile.objects.filter(username="venkatesh").first()
+
+def get_blinkit_api_headers(user_profile, include_auth_key=True):
+    if not user_profile.blinkit_device_id:
+        user_profile.blinkit_device_id = uuid.uuid4().hex[:16]
+        user_profile.save()
+    if not user_profile.blinkit_session_uuid:
+        user_profile.blinkit_session_uuid = str(uuid.uuid4())
+        user_profile.save()
 
     headers = {
         "app_client": "consumer_web",
@@ -29,186 +52,120 @@ def get_blinkit_api_headers(include_auth_key=True):
         "app_version": "52434332",
         "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
         "req_key": REQ_KEY,
-        "device_id": BLINKIT_SESSION["device_id"],
-        "session_uuid": BLINKIT_SESSION["session_uuid"],
+        "device_id": user_profile.blinkit_device_id,
+        "session_uuid": user_profile.blinkit_session_uuid,
         "referer": "https://blinkit.com/",
         "origin": "https://blinkit.com"
     }
 
-    if include_auth_key and BLINKIT_SESSION.get("auth_key"):
-        headers["auth_key"] = BLINKIT_SESSION["auth_key"]
+    if include_auth_key and user_profile.blinkit_auth_key:
+        headers["auth_key"] = user_profile.blinkit_auth_key
 
-    if BLINKIT_SESSION.get("access_token"):
-        headers["access_token"] = BLINKIT_SESSION["access_token"]
+    if user_profile.blinkit_access_token:
+        headers["access_token"] = user_profile.blinkit_access_token
 
     return headers
 
-def ensure_blinkit_auth_key():
-    if BLINKIT_SESSION.get("auth_key"):
-        return BLINKIT_SESSION["auth_key"]
+def ensure_blinkit_auth_key(user_profile):
+    if user_profile.blinkit_auth_key:
+        return user_profile.blinkit_auth_key
 
     try:
-        headers = get_blinkit_api_headers(include_auth_key=False)
+        headers = get_blinkit_api_headers(user_profile, include_auth_key=False)
         url = "https://blinkit.com/v2/accounts/auth_key/"
         res = requests.get(url, headers=headers, impersonate="chrome110", timeout=10)
         if res.status_code == 200:
             data = res.json()
             auth_key = data.get("auth_key")
             if auth_key:
-                BLINKIT_SESSION["auth_key"] = auth_key
+                user_profile.blinkit_auth_key = auth_key
+                user_profile.save()
                 return auth_key
     except Exception as e:
-        print(f"Error fetching Blinkit auth_key: {e}")
-
+        print(f"Error getting Blinkit auth key for user {user_profile.name}: {e}")
     return None
-
-def parse_reorder_ids(deeplink):
-    if not deeplink: return []
-    m = re.search(r'product_ids=([\d,]+)', str(deeplink))
-    if not m: return []
-    return [int(x) for x in m.group(1).split(',') if x.isdigit()]
-
-def text_of(v):
-    if isinstance(v, str): return v
-    if isinstance(v, dict) and 'text' in v: return v['text']
-    return None
-
-def as_num(v):
-    if isinstance(v, (int, float)): return float(v)
-    if isinstance(v, str):
-        cleaned = re.sub(r'[^\d.]', '', v)
-        try: return float(cleaned)
-        except: pass
-    return 0.0
-
-def fetch_exact_blinkit_order_details(order_id):
-    """Fetches exact individual item prices, product names, and bill charges directly from Blinkit order_details API."""
-    try:
-        ensure_blinkit_auth_key()
-        headers = get_blinkit_api_headers()
-        url = f"https://blinkit.com/v1/layout/order_details/{order_id}"
-        res = requests.post(url, headers=headers, json={}, impersonate="chrome110", timeout=10)
-        if res.status_code != 200:
-            return [], 0.0
-
-        snippets = res.json().get("response", {}).get("snippets", [])
-        item_details = []
-        other_charges = 0.0
-
-        for s in snippets:
-            wtype = s.get("widget_type")
-            s_data = s.get("data", {})
-
-            if wtype in ["z_v3_image_text_snippet_type_30", "v2_image_text_snippet_type_30"]:
-                p_name = s_data.get("title", {}).get("text")
-                sub3 = s_data.get("subtitle3", {}).get("text", "")
-
-                price = 0.0
-                if p_name and sub3:
-                    price_match = re.findall(r"₹\s*(\d+(?:\.\d+)?)", sub3)
-                    if price_match:
-                        price = float(price_match[-1])
-                    item_details.append({"name": p_name, "price": price, "quantity": 1})
-
-            elif wtype == "cart_bill_item":
-                left = s_data.get("left_header", {}).get("text", "")
-                right = s_data.get("right_header", {}).get("text", "")
-                if "handling" in left.lower() or "delivery" in left.lower():
-                    val_match = re.search(r"(\d+(?:\.\d+)?)", right)
-                    if val_match:
-                        other_charges += float(val_match.group(1))
-
-        return item_details, other_charges
-    except Exception as e:
-        print(f"Error fetching exact details for order {order_id}: {e}")
-        return [], 0.0
 
 def extract_blinkit_orders_from_sdui(root):
     orders = []
-    seen = set()
+    if not isinstance(root, (dict, list)):
+        return orders
 
     def visit(node):
-        if not node or not isinstance(node, (dict, list)): return
-        if id(node) in seen: return
-        seen.add(id(node))
-
         if isinstance(node, list):
             for item in node: visit(item)
             return
-
-        if node.get('widget_type') == 'order_history_container_vr':
-            common = node.get('tracking', {}).get('common_attributes', {})
-            names = []
-            ids = set()
-            total = 0.0
-            placed_at = 'Recently'
-
-            def inner(n):
-                nonlocal total, placed_at
-                if not n or not isinstance(n, (dict, list)): return
-                if isinstance(n, list):
-                    for item in n: inner(item)
-                    return
-                
-                acc = n.get('image', {}).get('accessibility_text', {}).get('text')
-                if isinstance(acc, str): names.append(acc)
-                
-                sub = text_of(n.get('left_underlined_subtitle'))
-                if sub and total == 0.0: total = as_num(sub)
-
-                ts = text_of(n.get('subtitle'))
-                if ts and re.search(r'\d', ts) and placed_at == 'Recently': placed_at = ts
-
-                for dl in [n.get('click_action', {}).get('blinkit_deeplink', {}).get('url'),
-                           n.get('bottom_button', {}).get('click_action', {}).get('blinkit_deeplink', {}).get('url')]:
-                    for pid in parse_reorder_ids(dl): ids.add(pid)
-
-                for k, v in n.items(): inner(v)
-
-            inner(node)
-            order_id = str(common.get('order_id') or common.get('id') or f'BLINKIT_{len(orders)+1}')
-            
-            # Fetch 100% real product item names & exact prices via order_details API
-            exact_items, other_chg = fetch_exact_blinkit_order_details(order_id)
-
-            if not exact_items:
-                prod_names = list(dict.fromkeys(names))
-                exact_items = []
-                if prod_names:
-                    approx_price = round(total / len(prod_names), 2)
-                    for pname in prod_names:
-                        exact_items.append({"name": pname, "price": approx_price, "quantity": 1})
-                    other_chg = max(0.0, round(total - (approx_price * len(prod_names)), 2))
-            else:
-                prod_names = [it["name"] for it in exact_items]
-
-            orders.append({
-                'order_id': order_id,
-                'placed_at': placed_at,
-                'total_amount': total,
-                'product_names': prod_names,
-                'item_details': exact_items,
-                'other_charges': other_chg
-            })
+        if not isinstance(node, dict):
             return
+
+        w_type = str(node.get("widget_type") or node.get("type") or node.get("id") or "")
+        data_obj = node.get("data") or {}
+
+        if ("order" in w_type.lower() or "order_card" in str(data_obj).lower()) and isinstance(data_obj, dict):
+            ord_id_raw = data_obj.get("order_id") or data_obj.get("id") or node.get("order_id")
+            if not ord_id_raw:
+                t_val = str(data_obj.get("title") or data_obj.get("header") or "")
+                m = re.search(r'CRN[-\s]?(\d+)', t_val, re.IGNORECASE)
+                if m: ord_id_raw = m.group(1)
+
+            if ord_id_raw:
+                order_id = str(ord_id_raw).strip()
+                placed_at = data_obj.get("placed_at") or data_obj.get("subtitle") or data_obj.get("status_text") or "Recently"
+                total = float(data_obj.get("total_amount") or data_obj.get("amount") or data_obj.get("price") or 0.0)
+
+                items_raw = data_obj.get("items") or data_obj.get("order_items") or []
+                prod_names = []
+                exact_items = []
+
+                if isinstance(items_raw, list):
+                    for it in items_raw:
+                        if isinstance(it, dict):
+                            pname = it.get("name") or it.get("title") or "Grocery Item"
+                            pprice = float(it.get("price") or it.get("unit_price") or 0.0)
+                            pqty = int(it.get("quantity") or it.get("qty") or 1)
+                            prod_names.append(pname)
+                            exact_items.append({"name": pname, "price": pprice, "quantity": pqty})
+                        elif isinstance(it, str):
+                            prod_names.append(it)
+                            exact_items.append({"name": it, "price": 0.0, "quantity": 1})
+
+                other_chg = 0.0
+                if not exact_items and prod_names:
+                    approx_price = round(total / len(prod_names), 2) if len(prod_names) > 0 else 0.0
+                    exact_items = [{"name": pname, "price": approx_price, "quantity": 1} for pname in prod_names]
+                elif exact_items:
+                    sum_items = sum(it["price"] * it["quantity"] for it in exact_items)
+                    other_chg = max(0.0, round(total - sum_items, 2))
+
+                if order_id and not any(o['order_id'] == order_id for o in orders):
+                    orders.append({
+                        'order_id': order_id,
+                        'placed_at': placed_at,
+                        'total_amount': total,
+                        'product_names': prod_names,
+                        'item_details': exact_items,
+                        'other_charges': other_chg
+                    })
+                    return
 
         for k, v in node.items(): visit(v)
 
     visit(root)
     return orders
 
-def fetch_blinkit_orders_internal(force_refresh=False):
+def fetch_blinkit_orders_internal(user_profile, force_refresh=False):
+    cache = get_blinkit_order_cache(user_profile.phone_number)
     now = time.time()
-    if not force_refresh and BLINKIT_ORDER_CACHE["data"] and (now - BLINKIT_ORDER_CACHE["timestamp"] < CACHE_TTL_SECONDS):
-        return BLINKIT_ORDER_CACHE["data"]
 
-    access_token = BLINKIT_SESSION.get("access_token")
+    if not force_refresh and cache.get("data") and (now - cache.get("timestamp", 0) < CACHE_TTL_SECONDS):
+        return cache["data"]
+
+    access_token = user_profile.blinkit_access_token
     if not access_token:
         orders_list = []
     else:
         try:
-            ensure_blinkit_auth_key()
-            headers = get_blinkit_api_headers()
+            ensure_blinkit_auth_key(user_profile)
+            headers = get_blinkit_api_headers(user_profile)
             url = "https://blinkit.com/v1/layout/order_history"
             res = requests.post(url, headers=headers, json={}, impersonate="chrome110", timeout=10)
             if res.status_code == 200:
@@ -217,29 +174,39 @@ def fetch_blinkit_orders_internal(force_refresh=False):
             else:
                 orders_list = []
         except Exception as e:
-            print(f"Error fetching Blinkit orders: {e}")
+            print(f"Error fetching Blinkit orders for {user_profile.name}: {e}")
             orders_list = []
 
-    BLINKIT_ORDER_CACHE["data"] = orders_list
-    BLINKIT_ORDER_CACHE["timestamp"] = now
+    cache["data"] = orders_list
+    cache["timestamp"] = now
     return orders_list
 
 @api_view(['GET'])
 def blinkit_status(request):
-    return Response(BLINKIT_SESSION, status=status.HTTP_200_OK)
+    u = get_user_profile_by_req(request)
+    return Response({
+        "phone_number": u.phone_number,
+        "is_logged_in": bool(u.blinkit_access_token),
+        "access_token": u.blinkit_access_token,
+        "user_id": u.id,
+        "user_name": u.name
+    }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 def blinkit_send_otp(request):
-    raw_phone = request.data.get("phone_number") or request.data.get("phone") or ""
+    u = get_user_profile_by_req(request)
+    raw_phone = request.data.get("phone_number") or request.data.get("phone") or u.phone_number
     phone_number = str(raw_phone).strip()
+
     if not phone_number or len(phone_number) < 10:
         return Response({"error": "Invalid 10-digit mobile number.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
 
-    BLINKIT_SESSION["phone_number"] = phone_number
+    u.phone_number = phone_number
+    u.save()
 
     try:
-        ensure_blinkit_auth_key()
-        headers = get_blinkit_api_headers()
+        ensure_blinkit_auth_key(u)
+        headers = get_blinkit_api_headers(u)
         url = "https://blinkit.com/v2/accounts/"
         res = requests.post(url, data={"user_phone": phone_number}, headers=headers, impersonate="chrome110", timeout=10)
 
@@ -256,16 +223,16 @@ def blinkit_send_otp(request):
 
 @api_view(['POST'])
 def blinkit_verify_otp(request):
-    raw_phone = request.data.get("phone_number") or request.data.get("phone") or BLINKIT_SESSION.get("phone_number") or ""
-    phone_number = str(raw_phone).strip()
+    u = get_user_profile_by_req(request)
+    phone_number = u.phone_number or "6382247549"
     otp = str(request.data.get("otp") or request.data.get("code") or "").strip()
     
     if not otp:
         return Response({"error": "OTP is required.", "ok": False, "success": False}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        ensure_blinkit_auth_key()
-        headers = get_blinkit_api_headers()
+        ensure_blinkit_auth_key(u)
+        headers = get_blinkit_api_headers(u)
         url = "https://blinkit.com/v2/accounts/verify/phone/code/"
         res = requests.post(url, data={"user_phone": phone_number, "verify_code": otp}, headers=headers, impersonate="chrome110", timeout=10)
 
@@ -273,18 +240,17 @@ def blinkit_verify_otp(request):
             data = res.json()
             token = data.get("access_token") or data.get("token") or (data.get("data") or {}).get("access_token")
             if token or data.get("verified") or data.get("success") or data.get("login"):
-                BLINKIT_SESSION["is_logged_in"] = True
-                BLINKIT_SESSION["access_token"] = token or "SESSION_ACTIVE"
-                BLINKIT_SESSION["user_id"] = data.get("user", {}).get("id") or data.get("user_id")
+                u.blinkit_access_token = token or "SESSION_ACTIVE"
+                u.save()
                 
                 # Immediately fetch & sync real user orders
-                fetch_blinkit_orders_internal(force_refresh=True)
+                fetch_blinkit_orders_internal(u, force_refresh=True)
 
                 return Response({
-                    "message": "Successfully logged in to Blinkit!",
+                    "message": f"Successfully logged in to Blinkit for {u.name}!",
                     "ok": True,
                     "success": True,
-                    "session": BLINKIT_SESSION
+                    "phone_number": u.phone_number
                 }, status=status.HTTP_200_OK)
             else:
                 return Response({"error": data.get("message") or "Invalid OTP verification code.", "ok": False, "success": False}, status=status.HTTP_400_BAD_REQUEST)
@@ -295,16 +261,20 @@ def blinkit_verify_otp(request):
 
 @api_view(['POST'])
 def blinkit_logout(request):
-    BLINKIT_SESSION["is_logged_in"] = False
-    BLINKIT_SESSION["access_token"] = None
-    BLINKIT_ORDER_CACHE["data"] = None
-    return Response({"message": "Logged out from Blinkit."}, status=status.HTTP_200_OK)
+    u = get_user_profile_by_req(request)
+    u.blinkit_access_token = None
+    u.save()
+
+    cache = get_blinkit_order_cache(u.phone_number)
+    cache["data"] = None
+    return Response({"message": f"Logged out from Blinkit for {u.name}."}, status=status.HTTP_200_OK)
 
 @api_view(['GET'])
 def blinkit_orders(request):
     try:
+        u = get_user_profile_by_req(request)
         force_refresh = request.query_params.get("refresh") == "true"
-        orders_list = fetch_blinkit_orders_internal(force_refresh=force_refresh)
+        orders_list = fetch_blinkit_orders_internal(u, force_refresh=force_refresh)
 
         output_orders = []
         for ord_item in orders_list:
@@ -342,12 +312,14 @@ def blinkit_orders(request):
 
         return Response({"orders": output_orders, "cached": not force_refresh}, status=status.HTTP_200_OK)
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": str(e), "orders": []}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 def blinkit_order_cart_details(request):
+    u = get_user_profile_by_req(request)
     order_id = request.data.get("order_id")
-    orders_list = fetch_blinkit_orders_internal(force_refresh=False)
+    cache = get_blinkit_order_cache(u.phone_number)
+    orders_list = cache.get("data") or []
     target_ord = next((o for o in orders_list if str(o.get("order_id")) == str(order_id)), None)
 
     if not target_ord:
