@@ -17,9 +17,18 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "==> [setup.sh] Ensuring python3-venv and essential tools are installed..."
+if ! python3 -m venv test_venv_check 2>/dev/null; then
+  sudo apt-get update -y
+  sudo apt-get install -y python3-venv python3-pip python3-dev build-essential nodejs npm || true
+else
+  rm -rf test_venv_check
+fi
+
 echo "==> [setup.sh] Creating virtual environment ($VENV_DIR) if missing..."
-if [ ! -d "$VENV_DIR" ]; then
-  "$PYTHON" -m venv "$VENV_DIR" || python3 -m venv "$VENV_DIR"
+if [ ! -d "$VENV_DIR" ] || [ ! -f "$VENV_DIR/bin/activate" ]; then
+  rm -rf "$VENV_DIR"
+  "$PYTHON" -m venv "$VENV_DIR"
 fi
 
 echo "==> [setup.sh] Activating virtual environment..."
