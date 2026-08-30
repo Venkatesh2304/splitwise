@@ -5,7 +5,10 @@ const UserContext = createContext();
 
 export function UserProvider({ children }) {
   const [users, setUsers] = useState([]);
-  const [activeUser, setActiveUser] = useState(null);
+  const [activeUser, setActiveUser] = useState(() => {
+    const saved = localStorage.getItem('splitwise_user');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [loading, setLoading] = useState(true);
 
   const refreshUsers = async () => {
@@ -13,12 +16,13 @@ export function UserProvider({ children }) {
       setLoading(true);
       const data = await api.getUsers();
       setUsers(data);
-      if (data.length > 0 && !activeUser) {
-        setActiveUser(data[0]);
-      } else if (activeUser) {
-        // preserve selected user if still exists
-        const updated = data.find(u => u.id === activeUser.id);
-        if (updated) setActiveUser(updated);
+      const saved = localStorage.getItem('splitwise_user');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          const matched = data.find(u => u.id === parsed.id || u.username === parsed.username);
+          if (matched) setActiveUser(matched);
+        } catch (e) {}
       }
     } catch (err) {
       console.error('Failed to fetch users:', err);

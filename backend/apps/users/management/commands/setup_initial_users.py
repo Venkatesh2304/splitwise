@@ -3,16 +3,19 @@ from apps.users.models import UserProfile
 from apps.groups.models import Group
 
 class Command(BaseCommand):
-    help = "Seeds initial 5 users (venkatesh, rahul, akash, anish, aatesh) and adds them to the default Groceries group."
+    help = "Seeds initial 5 users (venkatesh, rahul, akash, anish, aathesh) with phone numbers and adds them to the default Groceries group."
 
     def handle(self, *args, **options):
         initial_users_data = [
-            {"username": "venkatesh", "name": "Venkatesh", "email": "venkatesh@example.com"},
-            {"username": "rahul", "name": "Rahul", "email": "rahul@example.com"},
-            {"username": "akash", "name": "Akash", "email": "akash@example.com"},
-            {"username": "anish", "name": "Anish", "email": "anish@example.com"},
-            {"username": "aatesh", "name": "Aatesh", "email": "aatesh@example.com"},
+            {"username": "venkatesh", "name": "Venkatesh", "phone_number": "6382247549", "email": "venkatesh@example.com"},
+            {"username": "rahul", "name": "Rahul", "phone_number": "9876543210", "email": "rahul@example.com"},
+            {"username": "akash", "name": "Akash", "phone_number": "9876543211", "email": "akash@example.com"},
+            {"username": "anish", "name": "Anish", "phone_number": "9876543212", "email": "anish@example.com"},
+            {"username": "aathesh", "name": "Aathesh", "phone_number": "9965817968", "email": "aathesh@example.com"},
         ]
+
+        # Cleanup old aatesh username if present
+        UserProfile.objects.filter(username="aatesh").delete()
 
         created_users = []
         for user_data in initial_users_data:
@@ -20,16 +23,20 @@ class Command(BaseCommand):
                 username=user_data["username"],
                 defaults={
                     "name": user_data["name"],
+                    "phone_number": user_data["phone_number"],
                     "email": user_data["email"],
+                    "password": "10",
                     "avatar_url": f"https://api.dicebear.com/7.x/avataaars/svg?seed={user_data['name']}"
                 }
             )
-            if not created and user.name != user_data["name"]:
+            if not created:
                 user.name = user_data["name"]
+                user.phone_number = user_data["phone_number"]
+                user.password = "10"
                 user.save()
             
-            status_str = "Created" if created else "Exists"
-            self.stdout.write(self.style.SUCCESS(f"User '{user.name}' ({user.username}) -> {status_str}"))
+            status_str = "Created" if created else "Updated"
+            self.stdout.write(self.style.SUCCESS(f"User '{user.name}' ({user.username}) -> Phone: {user.phone_number} [{status_str}]"))
             created_users.append(user)
 
         # Get or create the main Groceries group

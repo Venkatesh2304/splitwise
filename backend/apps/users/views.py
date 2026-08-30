@@ -9,7 +9,7 @@ class UserProfileViewSet(viewsets.ModelViewSet):
     serializer_class = UserProfileSerializer
 
     def list(self, request, *args, **kwargs):
-        # Auto-seed initial demo users including venkatesh if none exist
+        # Auto-seed initial demo users if none exist
         if not UserProfile.objects.filter(username='venkatesh').exists():
             demo_users = [
                 {
@@ -21,28 +21,36 @@ class UserProfileViewSet(viewsets.ModelViewSet):
                     "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=Venkatesh"
                 },
                 {
-                    "username": "alex",
-                    "name": "Alex Johnson",
-                    "email": "alex@example.com",
+                    "username": "rahul",
+                    "name": "Rahul",
+                    "email": "rahul@example.com",
                     "phone_number": "9876543210",
                     "password": "10",
-                    "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=Alex"
+                    "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=Rahul"
                 },
                 {
-                    "username": "sarah",
-                    "name": "Sarah Miller",
-                    "email": "sarah@example.com",
+                    "username": "akash",
+                    "name": "Akash",
+                    "email": "akash@example.com",
                     "phone_number": "9876543211",
                     "password": "10",
-                    "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah"
+                    "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=Akash"
                 },
                 {
-                    "username": "david",
-                    "name": "David Chen",
-                    "email": "david@example.com",
+                    "username": "anish",
+                    "name": "Anish",
+                    "email": "anish@example.com",
                     "phone_number": "9876543212",
                     "password": "10",
-                    "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=David"
+                    "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=Anish"
+                },
+                {
+                    "username": "aathesh",
+                    "name": "Aathesh",
+                    "email": "aathesh@example.com",
+                    "phone_number": "9965817968",
+                    "password": "10",
+                    "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=Aathesh"
                 },
             ]
             for u in demo_users:
@@ -61,10 +69,10 @@ class UserProfileViewSet(viewsets.ModelViewSet):
         try:
             user = UserProfile.objects.get(username__iexact=username)
         except UserProfile.DoesNotExist:
-            return Response({'error': f"User '{username}' not found. Default usernames: venkatesh, alex, sarah, david"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': f"User '{username}' not found. Initial usernames: venkatesh, rahul, akash, anish, aathesh"}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.password != password:
-            return Response({'error': 'Invalid password. Default password for all users is 10'}, status=status.HTTP_401_UNAUTHORIZED)
+        if user.password and user.password != password:
+            return Response({'error': 'Invalid password. Default password is 10'}, status=status.HTTP_401_UNAUTHORIZED)
 
         serializer = self.get_serializer(user)
         return Response({

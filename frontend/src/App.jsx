@@ -1,5 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { UserProvider } from './context/UserContext';
+import { UserProvider, useUser } from './context/UserContext';
 import { api } from './services/api';
 
 import Header from './components/Header';
@@ -18,6 +17,7 @@ import AddMemberToGroupModal from './components/AddMemberToGroupModal';
 import { LayoutDashboard, ShoppingBag, ShoppingCart, LogOut, Plus } from 'lucide-react';
 
 function AppContent() {
+  const { setActiveUser } = useUser();
   const [currentUser, setCurrentUser] = useState(() => {
     const saved = localStorage.getItem('splitwise_user');
     return saved ? JSON.parse(saved) : null;
@@ -70,12 +70,14 @@ function AppContent() {
 
   const handleLoginSuccess = (userObj) => {
     setCurrentUser(userObj);
+    if (setActiveUser) setActiveUser(userObj);
     localStorage.setItem('splitwise_user', JSON.stringify(userObj));
     fetchGroups();
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
+    if (setActiveUser) setActiveUser(null);
     localStorage.removeItem('splitwise_user');
   };
 

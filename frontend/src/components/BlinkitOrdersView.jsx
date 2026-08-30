@@ -54,8 +54,11 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
   };
 
   useEffect(() => {
+    if (currentUser && currentUser.phone_number) {
+      setPhone(currentUser.phone_number);
+    }
     fetchStatusAndOrders(false);
-  }, []);
+  }, [currentUser]);
 
   const handleSendOtp = async (e) => {
     e.preventDefault();
