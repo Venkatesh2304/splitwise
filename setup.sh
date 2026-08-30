@@ -35,11 +35,6 @@ python manage.py migrate --noinput
 echo "==> [setup.sh] Seeding initial 5 users (venkatesh, rahul, akash, anish, aatesh)..."
 python manage.py setup_initial_users
 
-echo "==> [setup.sh] Installing local frontend packages & building bundle..."
-cd "$PROJECT_DIR/frontend"
-npm install
-npm run build
-
 cd "$PROJECT_DIR"
 
 echo "==> [setup.sh] Creating systemd service: $BACKEND_SERVICE (Port 5002)"

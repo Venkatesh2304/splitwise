@@ -7,16 +7,20 @@ SSH_KEY="/home/venkatesh/Downloads/billingv2.pem"
 REMOTE_PROJECT_DIR="/home/ubuntu/splitwise"
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_DIR="$PROJECT_DIR/.venv"
 
+echo "==> [deploy.sh] Building frontend bundle locally..."
+cd "$PROJECT_DIR/frontend"
+npm run build
+
+cd "$PROJECT_DIR"
 echo "==> [deploy.sh] Checking git status..."
 if [ -n "$(git status --porcelain)" ]; then
-  echo "==> Uncommitted/untracked changes present. Committing automatically..."
+  echo "==> Committing local changes & built frontend/dist..."
   git add .
-  git commit -m "Auto-deploy update $(date '+%Y-%m-%d %H:%M:%S')" || true
+  git commit -m "Auto-deploy update with pre-built dist $(date '+%Y-%m-%d %H:%M:%S')" || true
 fi
 
-echo "==> [deploy.sh] Pushing latest changes to GitHub..."
+echo "==> [deploy.sh] Pushing latest changes & dist to GitHub..."
 git push origin main -f || git push origin MASTER -f || git push origin -f
 
 echo "==> [deploy.sh] SSH connecting to remote server $REMOTE_HOST..."

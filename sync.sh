@@ -4,7 +4,7 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
-echo "==> [sync.sh] Pulling latest changes from remote..."
+echo "==> [sync.sh] Pulling latest changes & pre-built dist from remote..."
 git stash --include-untracked || true
 git pull --ff
 
@@ -28,13 +28,6 @@ python manage.py migrate --noinput
 
 echo "==> [sync.sh] Seeding initial 5 users (venkatesh, rahul, akash, anish, aatesh)..."
 python manage.py setup_initial_users
-
-echo "==> [sync.sh] Building frontend asset bundle..."
-cd "$PROJECT_DIR/frontend"
-if command -v npm >/dev/null 2>&1; then
-  npm install
-  npm run build
-fi
 
 cd "$PROJECT_DIR"
 echo "==> [sync.sh] Restarting systemd services..."
