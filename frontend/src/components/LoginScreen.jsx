@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { api } from '../services/api';
+import { api, API_BASE_URL } from '../services/api';
 import { Lock, LogIn, Sparkles, User, KeyRound } from 'lucide-react';
 
 export default function LoginScreen({ onLoginSuccess, demoUsers }) {
-  const [username, setUsername] = useState('venkatesh');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('10');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -19,7 +19,7 @@ export default function LoginScreen({ onLoginSuccess, demoUsers }) {
       setSubmitting(true);
       setError(null);
       
-      const res = await fetch('http://localhost:8000/api/users/login/', {
+      const res = await fetch(`${API_BASE_URL}/users/login/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: username.trim(), password: password.trim() })
@@ -38,98 +38,114 @@ export default function LoginScreen({ onLoginSuccess, demoUsers }) {
     }
   };
 
-  const handlePickAvatar = (userObj) => {
-    setUsername(userObj.username || userObj.name.toLowerCase());
+  const handleSelectDemoUser = (u) => {
+    setUsername(u.username);
     setPassword('10');
+    setError(null);
   };
 
   return (
     <div style={{
       minHeight: '100vh',
-      backgroundColor: '#0f172a',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
+      backgroundColor: 'var(--bg-dark)',
       padding: '1.5rem',
-      background: 'radial-gradient(circle at 50% 30%, rgba(16, 185, 129, 0.12), transparent 70%)'
+      backgroundImage: 'radial-gradient(circle at 50% 30%, rgba(16, 185, 129, 0.08) 0%, transparent 60%)'
     }}>
-      <div className="card" style={{
+      <div style={{
         width: '100%',
         maxWidth: '440px',
-        padding: '2.25rem 2rem',
-        borderRadius: 'var(--radius-xl)',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.5)'
+        backgroundColor: 'var(--bg-card)',
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--border-color)',
+        padding: '2rem 1.75rem',
+        boxShadow: 'var(--shadow-lg)'
       }}>
-        {/* Branding Header */}
+        {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <div style={{
-            width: '54px',
-            height: '54px',
-            borderRadius: '16px',
-            background: 'linear-gradient(135deg, #10b981, #06b6d4)',
+            width: '3.5rem',
+            height: '3.5rem',
+            borderRadius: '50%',
+            backgroundColor: 'rgba(16, 185, 129, 0.15)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            margin: '0 auto 1rem auto',
-            boxShadow: '0 8px 24px rgba(16, 185, 129, 0.35)'
+            margin: '0 auto 1rem',
+            color: 'var(--accent-primary)',
+            border: '1px solid rgba(16, 185, 129, 0.3)'
           }}>
-            <Sparkles size={28} color="#ffffff" />
+            <Lock size={26} />
           </div>
-          <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: '#ffffff', marginBottom: '0.35rem' }}>
-            Splitwise + Blinkit
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#ffffff', marginBottom: '0.4rem' }}>
+            Welcome to Splitwise
           </h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-            Sign in to manage splitwise groups & split Blinkit grocery bills.
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>
+            Select your profile or enter credentials to sign in
           </p>
         </div>
 
-        {/* Demo Persona Quick Selectors */}
-        <div style={{ marginBottom: '1.5rem' }}>
-          <label className="form-label" style={{ textAlign: 'center', display: 'block', marginBottom: '0.65rem' }}>
-            Quick Select Account
-          </label>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.6rem' }}>
-            {(demoUsers || []).map(u => {
-              const uName = u.username || u.name.toLowerCase();
-              const isSelected = username.toLowerCase() === uName.toLowerCase();
-              return (
-                <button
-                  key={u.id}
-                  type="button"
-                  onClick={() => handlePickAvatar(u)}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: '0.35rem',
-                    padding: '0.6rem 0.3rem',
-                    backgroundColor: isSelected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(30, 41, 59, 0.6)',
-                    border: isSelected ? '2px solid var(--accent-primary)' : '1px solid var(--border-color)',
-                    borderRadius: 'var(--radius-md)',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease'
-                  }}
-                >
-                  <img
-                    src={u.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${u.name}`}
-                    alt={u.name}
-                    className="avatar"
-                    style={{ width: '32px', height: '32px' }}
-                  />
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: isSelected ? '#ffffff' : 'var(--text-muted)' }}>
-                    {u.name.split(' ')[0]}
-                  </span>
-                </button>
-              );
-            })}
+        {/* Quick User Picker Buttons */}
+        {demoUsers && demoUsers.length > 0 && (
+          <div style={{ marginBottom: '1.75rem' }}>
+            <label className="form-label" style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>
+              Quick Select Profile:
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '0.5rem' }}>
+              {demoUsers.map((u) => {
+                const isSelected = username.toLowerCase() === u.username.toLowerCase();
+                return (
+                  <button
+                    key={u.id || u.username}
+                    type="button"
+                    onClick={() => handleSelectDemoUser(u)}
+                    style={{
+                      padding: '0.5rem 0.6rem',
+                      borderRadius: 'var(--radius-md)',
+                      border: isSelected ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                      backgroundColor: isSelected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(30, 41, 59, 0.5)',
+                      color: isSelected ? '#ffffff' : 'var(--text-muted)',
+                      fontSize: '0.8rem',
+                      fontWeight: isSelected ? 700 : 500,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    <div style={{
+                      width: '1.4rem',
+                      height: '1.4rem',
+                      borderRadius: '50%',
+                      backgroundColor: isSelected ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.1)',
+                      color: '#ffffff',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '0.7rem',
+                      fontWeight: 700
+                    }}>
+                      {u.name ? u.name[0].toUpperCase() : u.username[0].toUpperCase()}
+                    </div>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {u.name || u.username}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
 
+        {/* Login Form */}
         <form onSubmit={handleLogin}>
           {error && (
             <div style={{
-              padding: '0.75rem 1rem',
-              backgroundColor: 'var(--bg-negative-light)',
+              padding: '0.65rem 0.85rem',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
               border: '1px solid var(--color-negative)',
               borderRadius: 'var(--radius-md)',
               color: 'var(--color-negative)',
@@ -147,7 +163,7 @@ export default function LoginScreen({ onLoginSuccess, demoUsers }) {
               <input
                 type="text"
                 className="form-input"
-                placeholder="e.g. venkatesh, alex, sarah"
+                placeholder="e.g. rahul, akash, venkatesh"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 style={{ paddingLeft: '2.5rem' }}
@@ -174,11 +190,21 @@ export default function LoginScreen({ onLoginSuccess, demoUsers }) {
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={submitting}
-            style={{ width: '100%', marginTop: '0.5rem', padding: '0.85rem' }}
+            disabled={submitting || !username.trim()}
+            style={{
+              width: '100%',
+              marginTop: '0.5rem',
+              padding: '0.75rem',
+              fontSize: '0.95rem',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '0.5rem'
+            }}
           >
             <LogIn size={18} />
-            <span>{submitting ? 'Authenticating...' : 'Sign In to Splitwise'}</span>
+            <span>{submitting ? 'Authenticating...' : 'Sign In'}</span>
           </button>
         </form>
       </div>

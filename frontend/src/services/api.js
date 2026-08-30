@@ -11,7 +11,7 @@ const getApiBaseUrl = () => {
   return 'http://localhost:5002/api';
 };
 
-const API_BASE_URL = getApiBaseUrl();
+export const API_BASE_URL = getApiBaseUrl();
 
 async function request(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint}`;

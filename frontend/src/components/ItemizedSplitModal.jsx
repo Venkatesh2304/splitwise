@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../services/api';
 import { X, Zap, Users, UserCheck, User, CheckCircle2, DollarSign } from 'lucide-react';
 
 export default function ItemizedSplitModal({
@@ -162,7 +163,7 @@ export default function ItemizedSplitModal({
       setError(null);
 
       const finalDescription = customTitle.trim() ? customTitle.trim() : defaultTitle;
-      const endpoint = isSwiggy ? 'http://localhost:8000/api/swiggy/split_order/' : 'http://localhost:8000/api/blinkit/split_order/';
+      const endpoint = isSwiggy ? `${API_BASE_URL}/swiggy/split_order/` : `${API_BASE_URL}/blinkit/split_order/`;
 
       const payload = {
         group_id: groceriesGroup.id,

@@ -76,7 +76,7 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
   const rawSimplifiedDebts = groupData.simplified_debts || [];
   const netBalances = groupData.net_balances || {};
 
-  const currentAccount = currentUser || activeUser || (members.find(m => m.name.toLowerCase().includes('venkatesh')) || members[0]);
+  const currentAccount = currentUser || activeUser || members[0];
   const myUserId = currentAccount ? currentAccount.id : null;
   const myBalance = myUserId ? (netBalances[myUserId] ?? netBalances[String(myUserId)] ?? 0.0) : 0.0;
 
@@ -344,7 +344,7 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
               {members.map((m) => {
                 const bal = netBalances[m.id] || 0.0;
-                const isMe = m.id === myUserId || (m.name && m.name.toLowerCase().includes('venkatesh'));
+                const isMe = m.id === myUserId;
                 return (
                   <div
                     key={m.id}
@@ -405,8 +405,8 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
                   const fromUser = members.find(m => m.id === d.from_user_id) || { name: `User #${d.from_user_id}` };
                   const toUser = members.find(m => m.id === d.to_user_id) || { name: `User #${d.to_user_id}` };
 
-                  const fromIsMe = fromUser.id === myUserId || (fromUser.name && fromUser.name.toLowerCase().includes('venkatesh'));
-                  const toIsMe = toUser.id === myUserId || (toUser.name && toUser.name.toLowerCase().includes('venkatesh'));
+                  const fromIsMe = fromUser.id === myUserId;
+                  const toIsMe = toUser.id === myUserId;
 
                   if (fromIsMe && toIsMe) return null;
 
