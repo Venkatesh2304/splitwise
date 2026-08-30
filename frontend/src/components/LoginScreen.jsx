@@ -130,9 +130,16 @@ export default function LoginScreen({ onLoginSuccess, demoUsers }) {
                     }}>
                       {u.name ? u.name[0].toUpperCase() : u.username[0].toUpperCase()}
                     </div>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {u.name || u.username}
-                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', overflow: 'hidden' }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                        {u.name || u.username}
+                      </span>
+                      {u.phone_number && (
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)' }}>
+                          📱 {u.phone_number}
+                        </span>
+                      )}
+                    </div>
                   </button>
                 );
               })}

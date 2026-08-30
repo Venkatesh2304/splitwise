@@ -45,7 +45,7 @@ export default function Header({
               alt={currentUser.name}
               style={{ width: '20px', height: '20px', borderRadius: '50%' }}
             />
-            <span style={{ fontWeight: 600 }}>{currentUser.name}</span>
+            <span style={{ fontWeight: 600 }}>{currentUser.name} {currentUser.phone_number ? `(${currentUser.phone_number})` : ''}</span>
           </div>
         )}
 
