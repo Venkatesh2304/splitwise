@@ -49,13 +49,17 @@ python manage.py migrate --noinput
 echo "==> [setup.sh] Seeding initial 5 users (venkatesh, rahul, akash, anish, aatesh)..."
 python manage.py setup_initial_users
 
-echo "==> [setup.sh] Installing Node & building frontend on port 5001..."
+echo "==> [setup.sh] Installing Node.js 22 LTS & building frontend on port 5001..."
 cd "$PROJECT_DIR/frontend"
-if command -v npm >/dev/null 2>&1; then
-  npm install
-  npm run build
-  npm install -g serve || true
+if ! command -v node >/dev/null 2>&1 || [ "$(node -v | cut -d'.' -f1 | tr -d 'v')" -lt 20 ]; then
+  echo "==> Upgrading Node.js to v22 LTS..."
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+  sudo apt-get install -y nodejs
 fi
+
+npm install
+npm run build
+npm install -g serve || true
 
 cd "$PROJECT_DIR"
 
