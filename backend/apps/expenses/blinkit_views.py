@@ -50,7 +50,7 @@ def ensure_blinkit_auth_key():
     try:
         headers = get_blinkit_api_headers(include_auth_key=False)
         url = "https://blinkit.com/v2/accounts/auth_key/"
-        res = requests.get(url, headers=headers, impersonate="chrome110", timeout=8)
+        res = requests.get(url, headers=headers, impersonate="chrome110", timeout=10)
         if res.status_code == 200:
             data = res.json()
             auth_key = data.get("auth_key")
@@ -233,7 +233,7 @@ def blinkit_send_otp(request):
     raw_phone = request.data.get("phone_number") or request.data.get("phone") or ""
     phone_number = str(raw_phone).strip()
     if not phone_number or len(phone_number) < 10:
-        return Response({"error": "Invalid phone number.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": "Invalid 10-digit mobile number.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
 
     BLINKIT_SESSION["phone_number"] = phone_number
 
@@ -245,8 +245,8 @@ def blinkit_send_otp(request):
 
         if res.status_code == 200:
             data = res.json()
-            if data.get("sms_sent") or data.get("success"):
-                return Response({"message": f"OTP sent to {phone_number} via SMS.", "success": True, "ok": True}, status=status.HTTP_200_OK)
+            if data.get("sms_sent") or data.get("success") or data.get("login"):
+                return Response({"message": data.get("message") or f"OTP sent to {phone_number} via SMS.", "success": True, "ok": True}, status=status.HTTP_200_OK)
             else:
                 return Response({"error": data.get("message") or "Failed to send OTP.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
         else:
@@ -271,10 +271,11 @@ def blinkit_verify_otp(request):
 
         if res.status_code == 200:
             data = res.json()
-            if data.get("verified") and data.get("access_token"):
+            token = data.get("access_token") or data.get("token") or (data.get("data") or {}).get("access_token")
+            if token or data.get("verified") or data.get("success") or data.get("login"):
                 BLINKIT_SESSION["is_logged_in"] = True
-                BLINKIT_SESSION["access_token"] = data["access_token"]
-                BLINKIT_SESSION["user_id"] = data.get("user", {}).get("id")
+                BLINKIT_SESSION["access_token"] = token or "SESSION_ACTIVE"
+                BLINKIT_SESSION["user_id"] = data.get("user", {}).get("id") or data.get("user_id")
                 
                 # Immediately fetch & sync real user orders
                 fetch_blinkit_orders_internal(force_refresh=True)
