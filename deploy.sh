@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Remote SSH configuration
+REMOTE_HOST="ubuntu@13.235.142.203"
+SSH_KEY="/home/venkatesh/Downloads/billingv2.pem"
+REMOTE_PROJECT_DIR="/home/ubuntu/splitwise"
+
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR="$PROJECT_DIR/.venv"
+
+echo "==> [deploy.sh] Checking git status..."
+if [ -n "$(git status --porcelain)" ]; then
+  echo "==> Uncommitted/untracked changes present. Committing automatically..."
+  git add .
+  git commit -m "Auto-deploy update $(date '+%Y-%m-%d %H:%M:%S')" || true
+fi
+
+echo "==> [deploy.sh] Pushing latest changes to GitHub..."
+git push origin main -f || git push origin MASTER -f || git push origin -f
+
+echo "==> [deploy.sh] SSH connecting to remote server $REMOTE_HOST..."
+ssh -o StrictHostKeyChecking=no -4 -i "$SSH_KEY" "$REMOTE_HOST" bash <<EOF
+  set -eu
+  if [ ! -d "$REMOTE_PROJECT_DIR" ]; then
+    echo "[Remote] Creating project directory $REMOTE_PROJECT_DIR..."
+    mkdir -p "$REMOTE_PROJECT_DIR"
+  fi
+  cd "$REMOTE_PROJECT_DIR"
+  echo "[Remote] Triggering sync.sh on server..."
+  bash sync.sh
+EOF
+
+echo "==> ✅ Remote deployment and sync completed successfully!"

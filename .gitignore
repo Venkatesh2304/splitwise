@@ -1,0 +1,43 @@
+# Python & Virtualenv
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.db
+*.sqlite3
+
+# Node & Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+.npm
+*.log
+npm-debug.log*
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Experimental & Debug artifacts
+experiments/
+blinkit_integration/
+swiggy_integration/
+blinkit_mcp/
+*.png
+*.jpg
+*.jpeg
+*.json
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig.json
+!backend/**/fixtures/*.json
+
+# Environment variables
+.env
+.env.local
+.env.production
