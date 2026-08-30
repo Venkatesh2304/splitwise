@@ -49,11 +49,6 @@ function AppContent() {
     try {
       const data = await api.getUsers();
       setDemoUsers(data);
-      if (!currentUser && data.length > 0) {
-        const v = data.find(u => u.username === 'venkatesh') || data[0];
-        setCurrentUser(v);
-        localStorage.setItem('splitwise_user', JSON.stringify(v));
-      }
     } catch (e) {
       console.error(e);
     }
