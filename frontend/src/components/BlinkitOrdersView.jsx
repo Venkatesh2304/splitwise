@@ -25,7 +25,8 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       setLoading(true);
       setError(null);
 
-      const statusRes = await fetch(`${API_BASE_URL}/blinkit/status/`);
+      const activePhone = currentUser?.phone_number || phone || '6382247549';
+      const statusRes = await fetch(`${API_BASE_URL}/blinkit/status/?phone=${encodeURIComponent(activePhone)}`);
       const statusData = await statusRes.json();
       setStatusInfo(statusData);
 
@@ -33,8 +34,8 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
 
       if (statusData.is_logged_in) {
         const url = forceRefresh 
-          ? `${API_BASE_URL}/blinkit/orders/?refresh=true`
-          : `${API_BASE_URL}/blinkit/orders/`;
+          ? `${API_BASE_URL}/blinkit/orders/?refresh=true&phone=${encodeURIComponent(activePhone)}`
+          : `${API_BASE_URL}/blinkit/orders/?phone=${encodeURIComponent(activePhone)}`;
 
         const ordersRes = await fetch(url);
         const ordersData = await ordersRes.json();
