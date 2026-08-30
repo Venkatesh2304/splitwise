@@ -18,6 +18,7 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
 fi
 
 echo "==> [setup.sh] Ensuring python3-venv and essential tools are installed..."
+sudo dpkg --configure -a || true
 if ! python3 -m venv test_venv_check 2>/dev/null; then
   sudo apt-get update -y
   sudo apt-get install -y python3-venv python3-pip python3-dev build-essential nodejs npm || true
