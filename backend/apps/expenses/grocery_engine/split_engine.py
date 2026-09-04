@@ -65,20 +65,31 @@ class GrocerySplitEngine:
 
         # 3. Calculate Itemized vs Bill-Level Splits
         if split_mode == "BILL_LEVEL":
-            assigned_ids = member_ids
-            if bill_split_data and "member_ids" in bill_split_data:
-                assigned_ids = [m_id for m_id in bill_split_data["member_ids"] if m_id in member_ids]
-            if not assigned_ids:
+            b_type = bill_split_data.get("type", "ALL") if bill_split_data else "ALL"
+            if b_type == "CUSTOM" and bill_split_data and "custom_amounts" in bill_split_data:
+                custom_dict = bill_split_data.get("custom_amounts", {})
+                for m_id in member_ids:
+                    val = float(custom_dict.get(str(m_id), 0.0) or 0.0)
+                    owed_amounts[m_id] = round(val, 2)
+                
+                diff = round(total_amount - sum(owed_amounts.values()), 2)
+                if diff != 0 and buyer.id in owed_amounts:
+                    owed_amounts[buyer.id] = round(owed_amounts[buyer.id] + diff, 2)
+            else:
                 assigned_ids = member_ids
+                if bill_split_data and "member_ids" in bill_split_data:
+                    assigned_ids = [m_id for m_id in bill_split_data["member_ids"] if m_id in member_ids]
+                if not assigned_ids:
+                    assigned_ids = member_ids
 
-            n = len(assigned_ids)
-            share_per_person = round(total_amount / n, 2)
-            for m_id in assigned_ids:
-                owed_amounts[m_id] = share_per_person
-            
-            diff = round(total_amount - sum(owed_amounts.values()), 2)
-            if diff != 0 and assigned_ids:
-                owed_amounts[assigned_ids[0]] = round(owed_amounts[assigned_ids[0]] + diff, 2)
+                n = len(assigned_ids)
+                share_per_person = round(total_amount / n, 2)
+                for m_id in assigned_ids:
+                    owed_amounts[m_id] = share_per_person
+                
+                diff = round(total_amount - sum(owed_amounts.values()), 2)
+                if diff != 0 and assigned_ids:
+                    owed_amounts[assigned_ids[0]] = round(owed_amounts[assigned_ids[0]] + diff, 2)
 
         elif split_mode == "ITEMIZED":
             sum_products = sum(it["price"] for it in products_json_list)
@@ -97,7 +108,7 @@ class GrocerySplitEngine:
                         temp_product_subtotals[personal_id] += item_price
                 elif item_mode == "ALL":
                     n = len(member_ids)
-                    share = round(item_price / n, 2)
+                    share = item_price / n if n > 0 else 0.0
                     for m_id in member_ids:
                         temp_product_subtotals[m_id] += share
                 elif item_mode == "SPECIFIC":
@@ -105,7 +116,7 @@ class GrocerySplitEngine:
                     if not target_ids:
                         target_ids = member_ids
                     n = len(target_ids)
-                    share = round(item_price / n, 2)
+                    share = item_price / n if n > 0 else 0.0
                     for m_id in target_ids:
                         if m_id in temp_product_subtotals:
                             temp_product_subtotals[m_id] += share
@@ -115,7 +126,7 @@ class GrocerySplitEngine:
             # Distribute common fees proportionally based on each person's item subtotal
             for m_id in member_ids:
                 sub = temp_product_subtotals[m_id]
-                fee_share = round((sub / total_subtotals_sum) * common_fees, 2) if common_fees > 0 else 0.0
+                fee_share = (sub / total_subtotals_sum) * common_fees if common_fees > 0 else 0.0
                 owed_amounts[m_id] = round(sub + fee_share, 2)
 
             calc_total = sum(owed_amounts.values())

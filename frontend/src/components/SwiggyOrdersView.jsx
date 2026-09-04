@@ -15,29 +15,46 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
   const [selectedOrderForSplit, setSelectedOrderForSplit] = useState(null);
   const [actionLoadingId, setActionLoadingId] = useState(null);
 
+  const [manualJson, setManualJson] = useState('');
+  const [syncingJson, setSyncingJson] = useState(false);
+
   const fetchStatusAndOrders = async (forceRefresh = false) => {
     try {
       setLoading(true);
       setError(null);
 
+      const activeUserId = currentUser?.id || '';
+      
       // Fetch Auth URL & status
-      const authRes = await fetch(`${API_BASE_URL}/swiggy/auth_url/`);
+      const authRes = await fetch(`${API_BASE_URL}/swiggy/auth_url/?user_id=${encodeURIComponent(activeUserId)}`);
       const authData = await authRes.json();
       setAuthUrl(authData.auth_url || '');
 
-      const statusRes = await fetch(`${API_BASE_URL}/swiggy/status/`);
+      const statusRes = await fetch(`${API_BASE_URL}/swiggy/status/?user_id=${encodeURIComponent(activeUserId)}`);
       const statusData = await statusRes.json();
       setStatusInfo(statusData);
 
       if (statusData.is_logged_in) {
         const url = forceRefresh 
-          ? `${API_BASE_URL}/swiggy/orders/?refresh=true`
-          : `${API_BASE_URL}/swiggy/orders/`;
+          ? `${API_BASE_URL}/swiggy/orders/?refresh=true&user_id=${encodeURIComponent(activeUserId)}`
+          : `${API_BASE_URL}/swiggy/orders/?user_id=${encodeURIComponent(activeUserId)}`;
 
         const ordersRes = await fetch(url);
         const ordersData = await ordersRes.json();
         if (ordersRes.ok) {
-          setOrders(ordersData.orders || []);
+          const rawOrders = ordersData.orders || [];
+          const sorted = [...rawOrders].sort((a, b) => {
+            const parseDate = (d) => {
+              if (!d || d === 'Recently') return 0;
+              const p = Date.parse(d);
+              return isNaN(p) ? 0 : p;
+            };
+            const timeA = parseDate(a.placed_at);
+            const timeB = parseDate(b.placed_at);
+            if (timeA !== timeB) return timeB - timeA;
+            return String(b.order_id || '').localeCompare(String(a.order_id || ''), undefined, { numeric: true });
+          });
+          setOrders(sorted);
           setIsCached(Boolean(ordersData.cached));
         } else {
           setError(ordersData.error || 'Failed to fetch Swiggy Instamart orders.');
@@ -80,11 +97,69 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
 
   const handleLogout = async () => {
     try {
-      await fetch(`${API_BASE_URL}/swiggy/logout/`, { method: 'POST' });
+      const activeUserId = currentUser?.id || '';
+      await fetch(`${API_BASE_URL}/swiggy/logout/`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: activeUserId })
+      });
       setOrders([]);
       fetchStatusAndOrders(true);
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleManualSync = async () => {
+    const input = manualJson.trim();
+    if (!input) return;
+    
+    try {
+      setSyncingJson(true);
+      const activeUserId = currentUser?.id || '';
+
+      let decodedInput = input;
+      try {
+        decodedInput = decodeURIComponent(input);
+      } catch (e) {
+        // Ignore if not fully encoded
+      }
+
+      if (decodedInput.startsWith("http://localhost") || decodedInput.includes("swiggy/callback")) {
+        // Handle OOB URL copy-paste
+        const queryStr = decodedInput.includes('?') ? decodedInput.split('?')[1] : decodedInput;
+        const urlParams = new URLSearchParams(queryStr);
+        const code = urlParams.get("code");
+        const phone = urlParams.get("phone") || activeUserId;
+        
+        if (!code) throw new Error("No authorization code found in the pasted URL");
+        
+        const res = await fetch(`${API_BASE_URL}/swiggy/callback/?code=${encodeURIComponent(code)}&phone=${encodeURIComponent(phone)}&ajax=1`, { method: 'GET' });
+        if (res.ok) {
+          setManualJson('');
+          fetchStatusAndOrders(true);
+        } else {
+          alert('Failed to complete Swiggy OAuth callback');
+        }
+      } else {
+        // Handle direct JSON payload
+        const res = await fetch(`${API_BASE_URL}/swiggy/sync_manual/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: activeUserId, json_data: input })
+        });
+        if (res.ok) {
+          setManualJson('');
+          fetchStatusAndOrders(true);
+        } else {
+          const data = await res.json();
+          alert(data.error || 'Failed to sync manual JSON');
+        }
+      }
+    } catch (err) {
+      alert(err.message || 'Error syncing input');
+    } finally {
+      setSyncingJson(false);
     }
   };
 
@@ -193,12 +268,45 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
               padding: '0.45rem 1rem',
               fontSize: '0.85rem',
               fontWeight: 600,
-              textDecoration: 'none'
+              textDecoration: 'none',
+              marginBottom: '1.5rem'
             }}
           >
             <span>Connect Swiggy MCP OAuth</span>
             <ExternalLink size={14} />
           </a>
+
+          <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.75rem', lineHeight: '1.4' }}>
+              <strong>Localhost Workaround:</strong> If the OAuth flow redirects to a broken <code>http://localhost...</code> page, copy the <strong>entire URL from your browser's address bar</strong> and paste it below. (Or paste raw JSON orders).
+            </p>
+            <textarea
+              value={manualJson}
+              onChange={(e) => setManualJson(e.target.value)}
+              placeholder="Paste http://localhost:8000/api/swiggy/callback/?phone=... OR raw JSON"
+              style={{
+                width: '100%',
+                minHeight: '100px',
+                padding: '0.5rem',
+                fontSize: '0.75rem',
+                fontFamily: 'monospace',
+                backgroundColor: 'rgba(15, 23, 42, 0.6)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-sm)',
+                color: 'var(--text-primary)',
+                marginBottom: '0.75rem',
+                resize: 'vertical'
+              }}
+            />
+            <button
+              className="btn btn-sm"
+              onClick={handleManualSync}
+              disabled={syncingJson || !manualJson.trim()}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              {syncingJson ? 'Syncing...' : 'Sync Orders via JSON'}
+            </button>
+          </div>
         </div>
       )}
 

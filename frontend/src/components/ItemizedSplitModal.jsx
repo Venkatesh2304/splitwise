@@ -111,15 +111,20 @@ export default function ItemizedSplitModal({
   const round2 = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
   const max1 = (n) => Math.max(1, n);
 
+  const activeBuyerId = buyerId || (currentUser ? currentUser.id : allMemberIds[0]);
+
   const itemList = itemsState.map(i => ({
     name: i.name,
-    price: i.price * (i.quantity || 1),
+    price: parseFloat(i.price) || 0,
     split_type: i.split_type,
-    assigned_ids: i.split_type === 'ALL' ? allMemberIds : i.split_type === 'PERSONAL' ? [activeSelfId] : (i.assigned_ids || allMemberIds)
+    assigned_ids: i.split_type === 'ALL' ? allMemberIds : i.split_type === 'PERSONAL' ? [activeBuyerId] : (i.assigned_ids || allMemberIds)
   }));
 
   const sumOfProducts = itemList.reduce((acc, i) => acc + i.price, 0);
-  const pooledTaxesAndCharges = Math.max(0, round2(totalAmount - sumOfProducts));
+  const explicitOtherCharges = parseFloat(order?.other_charges || 0);
+  const pooledTaxesAndCharges = explicitOtherCharges > 0
+    ? explicitOtherCharges
+    : Math.max(0, round2(totalAmount - sumOfProducts));
 
   const computedFinalOwedMap = {};
   allMemberIds.forEach(id => { computedFinalOwedMap[id] = 0.0; });
@@ -128,32 +133,59 @@ export default function ItemizedSplitModal({
     if (billSubMode === 'ALL') {
       const perPerson = round2(totalAmount / max1(allMemberIds.length));
       allMemberIds.forEach(id => { computedFinalOwedMap[id] = perPerson; });
+      const currentSum = Object.values(computedFinalOwedMap).reduce((a, b) => round2(a + b), 0);
+      const diff = round2(totalAmount - currentSum);
+      if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
+        computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
+      }
     } else if (billSubMode === 'CHOOSE') {
       const assigned = billAssignedMemberIds.length > 0 ? billAssignedMemberIds : allMemberIds;
       const perPerson = round2(totalAmount / max1(assigned.length));
       assigned.forEach(id => { computedFinalOwedMap[id] = perPerson; });
+      const currentSum = Object.values(computedFinalOwedMap).reduce((a, b) => round2(a + b), 0);
+      const diff = round2(totalAmount - currentSum);
+      if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
+        computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
+      }
     } else if (billSubMode === 'CUSTOM') {
       allMemberIds.forEach(id => {
         const val = parseFloat(customBillAmounts[id] || 0.0);
         computedFinalOwedMap[id] = isNaN(val) ? 0.0 : val;
       });
+      const currentSum = Object.values(computedFinalOwedMap).reduce((a, b) => round2(a + b), 0);
+      const diff = round2(totalAmount - currentSum);
+      if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
+        computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
+      }
     }
   } else {
+    const tempProductSubtotals = {};
+    allMemberIds.forEach(id => { tempProductSubtotals[id] = 0.0; });
+
     itemList.forEach(item => {
       const assigned = item.assigned_ids.length > 0 ? item.assigned_ids : allMemberIds;
-      const share = round2(item.price / max1(assigned.length));
+      const share = item.price / max1(assigned.length);
       assigned.forEach(id => {
-        if (computedFinalOwedMap[id] !== undefined) {
-          computedFinalOwedMap[id] = round2(computedFinalOwedMap[id] + share);
+        if (tempProductSubtotals[id] !== undefined) {
+          tempProductSubtotals[id] += share;
         }
       });
     });
 
-    if (pooledTaxesAndCharges > 0) {
-      const feeShare = round2(pooledTaxesAndCharges / max1(allMemberIds.length));
-      allMemberIds.forEach(id => {
-        computedFinalOwedMap[id] = round2(computedFinalOwedMap[id] + feeShare);
-      });
+    const totalSubtotalsSum = Object.values(tempProductSubtotals).reduce((a, b) => a + b, 0) || 1.0;
+
+    let calcSum = 0;
+    allMemberIds.forEach(id => {
+      const sub = tempProductSubtotals[id];
+      const feeShare = pooledTaxesAndCharges > 0 ? (sub / totalSubtotalsSum) * pooledTaxesAndCharges : 0.0;
+      const finalVal = round2(sub + feeShare);
+      computedFinalOwedMap[id] = finalVal;
+      calcSum = round2(calcSum + finalVal);
+    });
+
+    const diff = round2(totalAmount - calcSum);
+    if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
+      computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
     }
   }
 
@@ -242,19 +274,37 @@ export default function ItemizedSplitModal({
             </div>
           )}
 
-          {/* Custom Expense Title / Label Input */}
-          <div style={{ marginBottom: '0.85rem' }}>
-            <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-dim)', display: 'block', marginBottom: '0.3rem' }}>
-              Custom Title / Expense Label (Optional):
-            </label>
-            <input
-              type="text"
-              className="form-input"
-              placeholder={defaultTitle}
-              value={customTitle}
-              onChange={(e) => setCustomTitle(e.target.value)}
-              style={{ fontSize: '0.85rem' }}
-            />
+          {/* Paid By & Custom Expense Title Inputs */}
+          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.85rem' }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-dim)', display: 'block', marginBottom: '0.3rem' }}>
+                Paid By:
+              </label>
+              <select
+                className="form-input"
+                value={buyerId || activeBuyerId}
+                onChange={(e) => setBuyerId(Number(e.target.value))}
+                style={{ fontSize: '0.85rem' }}
+              >
+                {groupMembers.map(m => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div style={{ flex: 2 }}>
+              <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-dim)', display: 'block', marginBottom: '0.3rem' }}>
+                Custom Title / Expense Label (Optional):
+              </label>
+              <input
+                type="text"
+                className="form-input"
+                placeholder={defaultTitle}
+                value={customTitle}
+                onChange={(e) => setCustomTitle(e.target.value)}
+                style={{ fontSize: '0.85rem' }}
+              />
+            </div>
           </div>
 
           {/* 2 Main Split Tabs: Tab 1 (Bill Level Split) vs Tab 2 (Product Level Split) */}

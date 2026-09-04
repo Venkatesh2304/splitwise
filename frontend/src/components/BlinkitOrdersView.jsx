@@ -26,7 +26,8 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       setError(null);
 
       const activePhone = currentUser?.phone_number || phone || '6382247549';
-      const statusRes = await fetch(`${API_BASE_URL}/blinkit/status/?phone=${encodeURIComponent(activePhone)}`);
+      const activeUserId = currentUser?.id || '';
+      const statusRes = await fetch(`${API_BASE_URL}/blinkit/status/?user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`);
       const statusData = await statusRes.json();
       setStatusInfo(statusData);
 
@@ -34,13 +35,37 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
 
       if (statusData.is_logged_in) {
         const url = forceRefresh 
-          ? `${API_BASE_URL}/blinkit/orders/?refresh=true&phone=${encodeURIComponent(activePhone)}`
-          : `${API_BASE_URL}/blinkit/orders/?phone=${encodeURIComponent(activePhone)}`;
+          ? `${API_BASE_URL}/blinkit/orders/?refresh=true&user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`
+          : `${API_BASE_URL}/blinkit/orders/?user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`;
 
         const ordersRes = await fetch(url);
         const ordersData = await ordersRes.json();
         if (ordersRes.ok) {
-          setOrders(ordersData.orders || []);
+          const rawOrders = ordersData.orders || [];
+          const sorted = [...rawOrders].sort((a, b) => {
+            const parseDate = (d) => {
+              if (!d || d === 'Recently') return 0;
+              let str = String(d).trim();
+              const now = new Date();
+              if (str.toLowerCase().startsWith('today')) {
+                const todayStr = `${now.getDate()} ${now.toLocaleString('default', { month: 'short' })} ${now.getFullYear()}`;
+                str = str.replace(/today/i, todayStr);
+              } else if (str.toLowerCase().startsWith('yesterday')) {
+                const yest = new Date(now.getTime() - 86400000);
+                const yestStr = `${yest.getDate()} ${yest.toLocaleString('default', { month: 'short' })} ${yest.getFullYear()}`;
+                str = str.replace(/yesterday/i, yestStr);
+              } else if (!/\d{4}/.test(str)) {
+                str = `${str} ${now.getFullYear()}`;
+              }
+              const p = Date.parse(str);
+              return isNaN(p) ? 0 : p;
+            };
+            const timeA = parseDate(a.placed_at);
+            const timeB = parseDate(b.placed_at);
+            if (timeA !== timeB) return timeB - timeA;
+            return String(b.order_id || '').localeCompare(String(a.order_id || ''), undefined, { numeric: true });
+          });
+          setOrders(sorted);
           setIsCached(Boolean(ordersData.cached));
         } else {
           setError(ordersData.error || 'Failed to fetch Blinkit orders.');
@@ -69,7 +94,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       const res = await fetch(`${API_BASE_URL}/blinkit/send_otp/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone_number: phone.trim() })
+        body: JSON.stringify({ user_id: currentUser?.id, phone_number: phone.trim() })
       });
       const data = await res.json();
       if (res.ok && (data.success || data.ok)) {
@@ -92,7 +117,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       const res = await fetch(`${API_BASE_URL}/blinkit/verify_otp/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone_number: phone.trim(), otp: otpCode.trim() })
+        body: JSON.stringify({ user_id: currentUser?.id, phone_number: phone.trim(), otp: otpCode.trim() })
       });
       const data = await res.json();
       if (res.ok && (data.success || data.ok)) {
@@ -134,7 +159,12 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
 
   const handleLogout = async () => {
     try {
-      await fetch(`${API_BASE_URL}/blinkit/logout/`, { method: 'POST' });
+      const activePhone = currentUser?.phone_number || phone || '6382247549';
+      await fetch(`${API_BASE_URL}/blinkit/logout/`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: currentUser?.id, phone_number: activePhone })
+      });
       setOrders([]);
       fetchStatusAndOrders(true);
     } catch (e) {
@@ -256,7 +286,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
                 <input
                   type="text"
                   className="form-input"
-                  placeholder="6-digit OTP code"
+                  placeholder="4-digit OTP code"
                   value={otpCode}
                   onChange={(e) => setOtpCode(e.target.value)}
                   disabled={authSubmitting}

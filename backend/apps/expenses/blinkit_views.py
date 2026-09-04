@@ -16,6 +16,7 @@ from apps.expenses.grocery_engine.state import (
     get_blinkit_order_cache,
     CACHE_TTL_SECONDS
 )
+from apps.expenses.grocery_engine.order_store import OrderStoreManager
 
 REQ_KEY = "c0e6868e-1180-400c-be51-f473479f1f0a"
 
@@ -85,6 +86,86 @@ def ensure_blinkit_auth_key(user_profile):
         print(f"Error getting Blinkit auth key for user {user_profile.name}: {e}")
     return None
 
+def extract_blinkit_quantity(sub_text):
+    if not sub_text:
+        return 1
+    m = re.search(r'x\s*(\d+)\s*$', sub_text, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'^\s*(\d+)\s*x', sub_text, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'x\s*(\d+)(?!\s*(?:g|kg|ml|l|gm|grams|liter|litre|pcs|pc|pack|packs)\b)', sub_text, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return 1
+
+def fetch_blinkit_order_details_v2(headers, order_id, cart_id):
+    if not order_id or not cart_id:
+        return None
+    url = f"https://blinkit.com/v1/layout/order_details_v2?order_id={order_id}&cart_id={cart_id}"
+    try:
+        res = requests.post(url, headers=headers, json={}, impersonate="chrome110", timeout=8)
+        if res.status_code == 200:
+            data = res.json()
+            if data and data.get("is_success"):
+                return data
+    except Exception as e:
+        print(f"Error fetching Blinkit order details for #{order_id}: {e}")
+    return None
+
+def parse_blinkit_order_details_v2(details_data):
+    if not details_data or not details_data.get("is_success"):
+        return None
+
+    snippets = (details_data.get("response") or {}).get("snippets") or []
+    items = []
+    bill_total = 0.0
+    item_total = 0.0
+
+    for snip in snippets:
+        w_type = str(snip.get("widget_type") or "")
+        data_obj = snip.get("data") or {}
+
+        if "z_v3_image_text_snippet" in w_type or "order_details_list" in str(snip.get("tracking", {})):
+            p_name = (data_obj.get("title") or {}).get("text")
+            sub1 = (data_obj.get("subtitle1") or {}).get("text", "")
+            sub3 = (data_obj.get("subtitle3") or {}).get("text", "")
+
+            qty = extract_blinkit_quantity(sub1)
+
+            price = 0.0
+            if sub3:
+                prices = re.findall(r'₹\s*(\d+(?:\.\d+)?)', sub3)
+                if prices:
+                    price = float(prices[-1])
+
+            if p_name:
+                items.append({"name": p_name, "price": price, "quantity": qty})
+
+        elif "cart_bill_item" in w_type:
+            left_t = (data_obj.get("left_header") or {}).get("text", "").lower()
+            right_t = (data_obj.get("right_header") or {}).get("text", "")
+            val_str = re.sub(r'[^\d.]', '', right_t)
+            val = float(val_str) if val_str else 0.0
+
+            if "bill total" in left_t:
+                bill_total = val
+            elif "item total" in left_t:
+                item_total = val
+
+    if items:
+        sum_items_price = sum(it["price"] for it in items)
+        other_charges = max(0.0, round(bill_total - sum_items_price, 2)) if bill_total > 0 else 0.0
+        return {
+            "item_details": items,
+            "product_names": [it["name"] for it in items],
+            "other_charges": other_charges,
+            "total_amount": bill_total if bill_total > 0 else sum_items_price
+        }
+
+    return None
+
 def extract_blinkit_orders_from_sdui(root):
     orders = []
     if not isinstance(root, (dict, list)):
@@ -100,6 +181,53 @@ def extract_blinkit_orders_from_sdui(root):
         w_type = str(node.get("widget_type") or node.get("type") or node.get("id") or "")
         data_obj = node.get("data") or {}
 
+        # NEW LAYOUT FORMAT parsing:
+        if "order_history_container_vr" in w_type:
+            tracking = node.get("tracking", {})
+            common = tracking.get("common_attributes", {})
+            order_id = common.get("order_id")
+            deeplink = str(common.get("deeplink") or str(data_obj.get("click_action", {})))
+            cart_id = None
+            m_cart = re.search(r'cart_id=(\d+)', deeplink)
+            if m_cart:
+                cart_id = m_cart.group(1)
+            
+            items = data_obj.get("items", [])
+            total_amount = 0.0
+            placed_at = "Recently"
+            product_names = []
+            
+            for item in items:
+                item_data = item.get("data") or {}
+                if "left_underlined_subtitle" in item_data:
+                    price_str = item_data["left_underlined_subtitle"].get("text", "")
+                    price_str = re.sub(r'[^\d.]', '', price_str)
+                    if price_str: total_amount = float(price_str)
+                if "subtitle" in item_data:
+                    placed_at = item_data["subtitle"].get("text", placed_at)
+                if "horizontal_item_list" in item_data:
+                    for h_item in item_data["horizontal_item_list"]:
+                        h_data = h_item.get("data") or {}
+                        h_img = h_data.get("image") or {}
+                        h_acc = h_img.get("accessibility_text") or {}
+                        p_text = h_acc.get("text", "")
+                        if p_text: product_names.append(p_text)
+            
+            if order_id and not any(o['order_id'] == order_id for o in orders):
+                approx_price = round(total_amount / len(product_names), 2) if product_names else 0.0
+                exact_items = [{"name": p, "price": approx_price, "quantity": 1} for p in product_names]
+                orders.append({
+                    'order_id': str(order_id).strip(),
+                    'cart_id': cart_id,
+                    'placed_at': placed_at,
+                    'total_amount': total_amount,
+                    'product_names': product_names,
+                    'item_details': exact_items,
+                    'other_charges': 0.0
+                })
+                return # Stop recursion for this node
+
+        # OLD LAYOUT FORMAT parsing fallback:
         if ("order" in w_type.lower() or "order_card" in str(data_obj).lower()) and isinstance(data_obj, dict):
             ord_id_raw = data_obj.get("order_id") or data_obj.get("id") or node.get("order_id")
             if not ord_id_raw:
@@ -139,6 +267,7 @@ def extract_blinkit_orders_from_sdui(root):
                 if order_id and not any(o['order_id'] == order_id for o in orders):
                     orders.append({
                         'order_id': order_id,
+                        'cart_id': None,
                         'placed_at': placed_at,
                         'total_amount': total,
                         'product_names': prod_names,
@@ -156,30 +285,48 @@ def fetch_blinkit_orders_internal(user_profile, force_refresh=False):
     cache = get_blinkit_order_cache(user_profile.phone_number)
     now = time.time()
 
+    access_token = user_profile.blinkit_access_token
+    if not access_token:
+        stored = OrderStoreManager.get_saved_orders(user_profile, "BLINKIT")
+        cache["data"] = stored
+        return stored
+
     if not force_refresh and cache.get("data") and (now - cache.get("timestamp", 0) < CACHE_TTL_SECONDS):
         return cache["data"]
 
-    access_token = user_profile.blinkit_access_token
-    if not access_token:
-        orders_list = []
-    else:
-        try:
-            ensure_blinkit_auth_key(user_profile)
-            headers = get_blinkit_api_headers(user_profile)
-            url = "https://blinkit.com/v1/layout/order_history"
-            res = requests.post(url, headers=headers, json={}, impersonate="chrome110", timeout=10)
-            if res.status_code == 200:
-                parsed_orders = extract_blinkit_orders_from_sdui(res.json())
-                orders_list = parsed_orders
-            else:
-                orders_list = []
-        except Exception as e:
-            print(f"Error fetching Blinkit orders for {user_profile.name}: {e}")
-            orders_list = []
+    fresh_orders = []
+    try:
+        ensure_blinkit_auth_key(user_profile)
+        headers = get_blinkit_api_headers(user_profile)
+        url = "https://blinkit.com/v1/layout/order_history"
+        res = requests.post(url, headers=headers, json={}, impersonate="chrome110", timeout=10)
+        if res.status_code == 200:
+            fresh_orders = extract_blinkit_orders_from_sdui(res.json())
 
-    cache["data"] = orders_list
+            # Enrich fresh orders with exact individual item prices via order_details_v2
+            for ord_item in fresh_orders:
+                o_id = ord_item.get("order_id")
+                c_id = ord_item.get("cart_id")
+                if o_id and c_id:
+                    dt_data = fetch_blinkit_order_details_v2(headers, o_id, c_id)
+                    parsed_dt = parse_blinkit_order_details_v2(dt_data)
+                    if parsed_dt and parsed_dt.get("item_details"):
+                        ord_item["item_details"] = parsed_dt["item_details"]
+                        ord_item["product_names"] = parsed_dt["product_names"]
+                        ord_item["other_charges"] = parsed_dt["other_charges"]
+                        if parsed_dt.get("total_amount") and parsed_dt["total_amount"] > 0:
+                            ord_item["total_amount"] = parsed_dt["total_amount"]
+                    time.sleep(0.3)
+
+        else:
+            print(f"Blinkit API status {res.status_code} for {user_profile.name}")
+    except Exception as e:
+        print(f"Error fetching Blinkit orders for {user_profile.name}: {e}")
+
+    merged_orders = OrderStoreManager.save_and_merge_orders(user_profile, "BLINKIT", fresh_orders)
+    cache["data"] = merged_orders
     cache["timestamp"] = now
-    return orders_list
+    return merged_orders
 
 @api_view(['GET'])
 def blinkit_status(request):

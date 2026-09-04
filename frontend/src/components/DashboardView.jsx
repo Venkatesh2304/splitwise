@@ -81,66 +81,29 @@ export default function DashboardView({ groups, onSelectGroup, onOpenAddGroup, o
         </div>
       </div>
 
-      {/* Overview Cards Grid */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-        gap: '1rem',
-        marginBottom: '1.75rem'
-      }}>
-        {/* Card 1: Overall Balance */}
+      {/* Single Net Balance Card */}
+      <div style={{ marginBottom: '1.75rem' }}>
         <div className="card" style={{
           background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.9), rgba(15, 23, 42, 0.9))',
-          borderLeft: `4px solid ${overallNet > 0 ? 'var(--color-positive)' : overallNet < 0 ? 'var(--color-negative)' : 'var(--text-muted)'}`
+          borderLeft: `4px solid ${overallNet > 0 ? 'var(--color-positive)' : overallNet < 0 ? 'var(--color-negative)' : 'var(--text-muted)'}`,
+          padding: '1.25rem 1.5rem'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-              Overall Balance
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Your Net Balance
             </span>
-            <Wallet size={18} color={overallNet >= 0 ? '#10b981' : '#f43f5e'} />
+            <Wallet size={22} color={overallNet > 0 ? '#10b981' : overallNet < 0 ? '#f43f5e' : '#94a3b8'} />
           </div>
           <div style={{
-            fontSize: '1.65rem',
+            fontSize: '2rem',
             fontWeight: 800,
             color: overallNet > 0 ? 'var(--color-positive)' : overallNet < 0 ? 'var(--color-negative)' : 'var(--text-main)',
-            marginBottom: '0.15rem'
+            marginBottom: '0.2rem'
           }}>
-            {overallNet > 0 ? `+₹${Math.round(overallNet)}` : overallNet < 0 ? `-₹${Math.round(Math.abs(overallNet))}` : '₹0'}
+            {overallNet > 0 ? `You are owed +₹${Math.round(overallNet)}` : overallNet < 0 ? `You owe ₹${Math.round(Math.abs(overallNet))}` : 'You are all settled up! (₹0)'}
           </div>
-          <div style={{ fontSize: '0.775rem', color: 'var(--text-dim)' }}>
-            {overallNet > 0 ? 'You get back money overall' : overallNet < 0 ? 'You owe money across groups' : 'Settled up'}
-          </div>
-        </div>
-
-        {/* Card 2: You are Owed */}
-        <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-              You are Owed
-            </span>
-            <ArrowUpRight size={18} color="#10b981" />
-          </div>
-          <div style={{ fontSize: '1.65rem', fontWeight: 800, color: 'var(--color-positive)', marginBottom: '0.15rem' }}>
-            +₹{Math.round(totalUserOwed)}
-          </div>
-          <div style={{ fontSize: '0.775rem', color: 'var(--text-dim)' }}>
-            Total friends owe you
-          </div>
-        </div>
-
-        {/* Card 3: You Owe */}
-        <div className="card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>
-              You Owe
-            </span>
-            <ArrowDownRight size={18} color="#f43f5e" />
-          </div>
-          <div style={{ fontSize: '1.65rem', fontWeight: 800, color: 'var(--color-negative)', marginBottom: '0.15rem' }}>
-            -₹{Math.round(totalUserOwes)}
-          </div>
-          <div style={{ fontSize: '0.775rem', color: 'var(--text-dim)' }}>
-            Total you owe friends
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+            {overallNet > 0 ? 'Net balance you get back across all groups' : overallNet < 0 ? 'Net balance you owe across all groups' : 'No outstanding balances in any group'}
           </div>
         </div>
       </div>

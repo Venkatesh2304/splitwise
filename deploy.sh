@@ -23,6 +23,9 @@ fi
 echo "==> [deploy.sh] Pushing latest changes & dist to GitHub..."
 git push origin main -f || git push origin MASTER -f || git push origin -f
 
+echo "==> [deploy.sh] Copying latest db.sqlite3 to remote server..."
+scp -o StrictHostKeyChecking=no -4 -i "$SSH_KEY" "$PROJECT_DIR/backend/db.sqlite3" "$REMOTE_HOST:$REMOTE_PROJECT_DIR/backend/db.sqlite3"
+
 echo "==> [deploy.sh] SSH connecting to remote server $REMOTE_HOST..."
 ssh -o StrictHostKeyChecking=no -4 -i "$SSH_KEY" "$REMOTE_HOST" bash <<EOF
   set -eu

@@ -37,6 +37,7 @@ urlpatterns = [
     path('api/swiggy/orders/', swiggy_views.swiggy_orders, name='swiggy_orders'),
     path('api/swiggy/split_order/', swiggy_views.swiggy_split_order, name='swiggy_split_order'),
     path('api/swiggy/remove_split/', swiggy_views.swiggy_remove_split, name='swiggy_remove_split'),
+    path('api/swiggy/sync_manual/', swiggy_views.swiggy_sync_manual, name='swiggy_sync_manual'),
 
     # API router
     path('api/', include((router.urls, 'api'))),

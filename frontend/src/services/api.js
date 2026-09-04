@@ -4,9 +4,12 @@ const getApiBaseUrl = () => {
   }
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
+    const port = window.location.port;
     // In production frontend port 5001 -> backend port 5002
-    const backendPort = window.location.port === '5001' ? '5002' : (window.location.port ? '8000' : '5002');
-    return `${window.location.protocol}//${hostname}:${backendPort}/api`;
+    if (port === '5001') {
+      return `${window.location.protocol}//${hostname}:5002/api`;
+    }
+    return `${window.location.protocol}//${hostname}${port ? ':' + port : ''}/api`;
   }
   return 'http://localhost:5002/api';
 };
