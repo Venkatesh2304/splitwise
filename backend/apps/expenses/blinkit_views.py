@@ -416,6 +416,27 @@ def blinkit_logout(request):
     cache["data"] = None
     return Response({"message": f"Logged out from Blinkit for {u.name}."}, status=status.HTTP_200_OK)
 
+@api_view(['POST'])
+def blinkit_sync_manual(request):
+    u = get_user_profile_by_req(request)
+    try:
+        json_data = request.data.get("json_data", {})
+        if isinstance(json_data, str):
+            json_data = json.loads(json_data)
+        
+        parsed = extract_blinkit_orders_from_sdui(json_data)
+        if not parsed and isinstance(json_data, list):
+            parsed = json_data
+
+        merged = OrderStoreManager.save_and_merge_orders(u, "BLINKIT", parsed)
+        cache = get_blinkit_order_cache(u.phone_number)
+        cache["data"] = merged
+        cache["timestamp"] = time.time()
+        
+        return Response({"message": f"Blinkit orders synced manually for {u.name}", "count": len(merged)}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({"error": f"Failed to parse JSON: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
 @api_view(['GET'])
 def blinkit_orders(request):
     try:
