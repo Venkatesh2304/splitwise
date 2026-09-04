@@ -12,7 +12,7 @@ class Command(BaseCommand):
             {"username": "akash", "name": "Akash", "phone_number": "7339569334", "email": "akash@example.com"},
             {"username": "anish", "name": "Anish", "phone_number": "9876543212", "email": "anish@example.com"},
             {"username": "aathesh", "name": "Aathesh", "phone_number": "9965817968", "email": "aathesh@example.com"},
-            {"username": "girish", "name": "Girish", "phone_number": "9999900000", "email": "girish@example.com"},
+            {"username": "giri", "name": "Giri", "phone_number": "9999900000", "email": "giri@example.com"},
         ]
 
         UserProfile.objects.filter(username="aatesh").delete()

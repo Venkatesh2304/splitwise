@@ -22,25 +22,25 @@ def run():
     print(f"Deleted {exp_cnt} Expenses, {shares_cnt} ExpenseShares, {payers_cnt} ExpensePayers.")
     print(f"Deleted {records_cnt} GroceryOrderRecords, {items_cnt} GroceryOrderItems.")
 
-    # 2. Add user Girish with dummy number
-    girish, created = UserProfile.objects.get_or_create(
-        username="girish",
+    # 2. Add user Giri with dummy number
+    giri, created = UserProfile.objects.get_or_create(
+        username="giri",
         defaults={
-            "name": "Girish",
+            "name": "Giri",
             "phone_number": "9999900000",
-            "email": "girish@example.com"
+            "email": "giri@example.com"
         }
     )
     if created:
-        print(f"Created new user profile: Girish (ID={girish.id}, Phone={girish.phone_number})")
+        print(f"Created new user profile: Giri (ID={giri.id}, Phone={giri.phone_number})")
     else:
-        print(f"User profile Girish already exists (ID={girish.id}, Phone={girish.phone_number})")
+        print(f"User profile Giri already exists (ID={giri.id}, Phone={giri.phone_number})")
 
-    # Add Girish to all groups
+    # Add Giri to all groups
     groups = Group.objects.all()
     for g in groups:
-        g.members.add(girish)
-        print(f"Added Girish to group '{g.name}' (Total members: {g.members.count()})")
+        g.members.add(giri)
+        print(f"Added Giri to group '{g.name}' (Total members: {g.members.count()})")
 
     # 3. Clear in-memory order caches
     state.BLINKIT_ORDER_CACHES.clear()
