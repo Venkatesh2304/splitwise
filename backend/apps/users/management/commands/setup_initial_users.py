@@ -9,9 +9,10 @@ class Command(BaseCommand):
         initial_users_data = [
             {"username": "venkatesh", "name": "Venkatesh", "phone_number": "6382247549", "email": "venkatesh@example.com"},
             {"username": "rahul", "name": "Rahul", "phone_number": "9876543210", "email": "rahul@example.com"},
-            {"username": "akash", "name": "Akash", "phone_number": "9876543211", "email": "akash@example.com"},
+            {"username": "akash", "name": "Akash", "phone_number": "7339569334", "email": "akash@example.com"},
             {"username": "anish", "name": "Anish", "phone_number": "9876543212", "email": "anish@example.com"},
             {"username": "aathesh", "name": "Aathesh", "phone_number": "9965817968", "email": "aathesh@example.com"},
+            {"username": "girish", "name": "Girish", "phone_number": "9999900000", "email": "girish@example.com"},
         ]
 
         UserProfile.objects.filter(username="aatesh").delete()
