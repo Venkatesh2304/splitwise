@@ -4,17 +4,10 @@ import { API_BASE_URL } from '../services/api';
 import { ShoppingBag, Zap, CheckCircle2, RefreshCw, Trash2 } from 'lucide-react';
 
 export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpenseAdded }) {
-  const [statusInfo, setStatusInfo] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isCached, setIsCached] = useState(false);
-
-  // In-tab OTP state
-  const [phone, setPhone] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [authSubmitting, setAuthSubmitting] = useState(false);
 
   // Selected order for splitting
   const [selectedOrderForSplit, setSelectedOrderForSplit] = useState(null);
@@ -25,51 +18,46 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       setLoading(true);
       setError(null);
 
-      const activePhone = currentUser?.phone_number || phone || '6382247549';
+      const activePhone = currentUser?.phone_number || '6382247549';
       const activeUserId = currentUser?.id || '';
-      const statusRes = await fetch(`${API_BASE_URL}/blinkit/status/?user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`);
-      const statusData = await statusRes.json();
-      setStatusInfo(statusData);
 
-      if (statusData.phone_number) setPhone(statusData.phone_number);
+      const url = forceRefresh 
+        ? `${API_BASE_URL}/blinkit/orders/?refresh=true&user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`
+        : `${API_BASE_URL}/blinkit/orders/?user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`;
 
-      if (statusData.is_logged_in) {
-        const url = forceRefresh 
-          ? `${API_BASE_URL}/blinkit/orders/?refresh=true&user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`
-          : `${API_BASE_URL}/blinkit/orders/?user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`;
-
-        const ordersRes = await fetch(url);
-        const ordersData = await ordersRes.json();
-        if (ordersRes.ok) {
-          const rawOrders = ordersData.orders || [];
-          const sorted = [...rawOrders].sort((a, b) => {
-            const parseDate = (d) => {
-              if (!d || d === 'Recently') return 0;
-              let str = String(d).trim();
-              const now = new Date();
-              if (str.toLowerCase().startsWith('today')) {
-                const todayStr = `${now.getDate()} ${now.toLocaleString('default', { month: 'short' })} ${now.getFullYear()}`;
-                str = str.replace(/today/i, todayStr);
-              } else if (str.toLowerCase().startsWith('yesterday')) {
-                const yest = new Date(now.getTime() - 86400000);
-                const yestStr = `${yest.getDate()} ${yest.toLocaleString('default', { month: 'short' })} ${yest.getFullYear()}`;
-                str = str.replace(/yesterday/i, yestStr);
-              } else if (!/\d{4}/.test(str)) {
-                str = `${str} ${now.getFullYear()}`;
-              }
-              const p = Date.parse(str);
-              return isNaN(p) ? 0 : p;
-            };
-            const timeA = parseDate(a.placed_at);
-            const timeB = parseDate(b.placed_at);
-            if (timeA !== timeB) return timeB - timeA;
-            return String(b.order_id || '').localeCompare(String(a.order_id || ''), undefined, { numeric: true });
-          });
-          setOrders(sorted);
-          setIsCached(Boolean(ordersData.cached));
-        } else {
-          setError(ordersData.error || 'Failed to fetch Blinkit orders.');
-        }
+      const ordersRes = await fetch(url);
+      const ordersData = await ordersRes.json();
+      
+      if (ordersRes.ok) {
+        const rawOrders = ordersData.orders || [];
+        const sorted = [...rawOrders].sort((a, b) => {
+          const parseDate = (d) => {
+            if (!d || d === 'Recently') return 0;
+            let str = String(d).trim();
+            const now = new Date();
+            if (str.toLowerCase().startsWith('today')) {
+              const todayStr = `${now.getDate()} ${now.toLocaleString('default', { month: 'short' })} ${now.getFullYear()}`;
+              str = str.replace(/today/i, todayStr);
+            } else if (str.toLowerCase().startsWith('yesterday')) {
+              const yest = new Date(now.getTime() - 86400000);
+              const yestStr = `${yest.getDate()} ${yest.toLocaleString('default', { month: 'short' })} ${yest.getFullYear()}`;
+              str = str.replace(/yesterday/i, yestStr);
+            } else if (!/\d{4}/.test(str)) {
+              str = `${str} ${now.getFullYear()}`;
+            }
+            const p = Date.parse(str);
+            return isNaN(p) ? 0 : p;
+          };
+          const timeA = parseDate(a.placed_at);
+          const timeB = parseDate(b.placed_at);
+          if (timeA !== timeB) return timeB - timeA;
+          return String(b.order_id || '').localeCompare(String(a.order_id || ''), undefined, { numeric: true });
+        });
+        setOrders(sorted);
+        setIsCached(Boolean(ordersData.cached));
+      } else {
+        setError(ordersData.error || 'Failed to fetch Blinkit orders.');
+        if (ordersData.orders) setOrders(ordersData.orders);
       }
     } catch (err) {
       console.error(err);
@@ -80,59 +68,8 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
   };
 
   useEffect(() => {
-    if (currentUser && currentUser.phone_number) {
-      setPhone(currentUser.phone_number);
-    }
     fetchStatusAndOrders(false);
   }, [currentUser]);
-
-  const handleSendOtp = async (e) => {
-    e.preventDefault();
-    if (!phone.trim()) return;
-    try {
-      setAuthSubmitting(true);
-      const res = await fetch(`${API_BASE_URL}/blinkit/send_otp/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: currentUser?.id, phone_number: phone.trim() })
-      });
-      const data = await res.json();
-      if (res.ok && (data.success || data.ok)) {
-        setOtpSent(true);
-      } else {
-        alert(data.error || 'Failed to send OTP.');
-      }
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setAuthSubmitting(false);
-    }
-  };
-
-  const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    if (!otpCode.trim()) return;
-    try {
-      setAuthSubmitting(true);
-      const res = await fetch(`${API_BASE_URL}/blinkit/verify_otp/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: currentUser?.id, phone_number: phone.trim(), otp: otpCode.trim() })
-      });
-      const data = await res.json();
-      if (res.ok && (data.success || data.ok)) {
-        setOtpSent(false);
-        setOtpCode('');
-        fetchStatusAndOrders(true);
-      } else {
-        alert(data.error || data.message || 'OTP verification failed.');
-      }
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setAuthSubmitting(false);
-    }
-  };
 
   const handleRemoveSplit = async (orderId) => {
     if (!window.confirm(`Remove split for order #${orderId} from Groceries group?`)) return;
@@ -157,31 +94,14 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      const activePhone = currentUser?.phone_number || phone || '6382247549';
-      await fetch(`${API_BASE_URL}/blinkit/logout/`, { 
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: currentUser?.id, phone_number: activePhone })
-      });
-      setOrders([]);
-      fetchStatusAndOrders(true);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   const formatDateTime = (placedAt) => {
     if (!placedAt) return '';
     return placedAt;
   };
 
-  const isLoggedIn = statusInfo && statusInfo.is_logged_in;
-
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto' }}>
-      {/* Account Status & Cache Banner */}
+      {/* Account Status & Extension Banner */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -196,13 +116,11 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
           <ShoppingBag size={18} color="#f59e0b" />
           <div>
             <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#ffffff', display: 'block', lineHeight: 1.2 }}>
-              {isLoggedIn ? `Blinkit (${statusInfo.phone_number || statusInfo.phone || 'Connected'})` : 'Connect Blinkit'}
+              Blinkit Orders ({currentUser?.name || 'Synced'})
             </span>
-            {isLoggedIn && (
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-                {isCached ? '⚡ Cached (Instant)' : '🌐 Live Sync'}
-              </span>
-            )}
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+              ⚡ Synced via Chrome Extension
+            </span>
           </div>
         </div>
 
@@ -228,84 +146,8 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
             <RefreshCw size={13} className={loading ? 'spin' : ''} />
             <span>Refresh</span>
           </button>
-
-          {isLoggedIn && (
-            <button
-              onClick={handleLogout}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-dim)',
-                cursor: 'pointer',
-                fontSize: '0.75rem',
-                padding: '0.25rem 0.4rem'
-              }}
-            >
-              Logout
-            </button>
-          )}
         </div>
       </div>
-
-      {/* In-Tab OTP Authentication Form */}
-      {!isLoggedIn && (
-        <div className="card" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
-          <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#ffffff', marginBottom: '0.35rem' }}>
-            Connect Blinkit Account
-          </h4>
-          <p style={{ fontSize: '0.775rem', color: 'var(--text-dim)', marginBottom: '1rem' }}>
-            Enter your mobile number to receive an OTP directly in Splitwise.
-          </p>
-
-          {!otpSent ? (
-            <form onSubmit={handleSendOtp} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <div>
-                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.3rem' }}>
-                  Mobile Number:
-                </label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="Enter 10-digit mobile number"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  disabled={authSubmitting}
-                />
-              </div>
-
-              <button type="submit" className="btn btn-primary btn-sm" disabled={authSubmitting || !phone.trim()}>
-                {authSubmitting ? 'Sending OTP...' : 'Send OTP'}
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handleVerifyOtp} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              <div>
-                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.3rem' }}>
-                  Enter OTP sent to {phone}:
-                </label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="4-digit OTP code"
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value)}
-                  disabled={authSubmitting}
-                  autoFocus
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button type="submit" className="btn btn-primary btn-sm" disabled={authSubmitting || !otpCode.trim()} style={{ flex: 1 }}>
-                  {authSubmitting ? 'Verifying...' : 'Verify OTP'}
-                </button>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setOtpSent(false)} disabled={authSubmitting}>
-                  Back
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
 
       {/* Loading state */}
       {loading && orders.length === 0 && (
@@ -329,13 +171,17 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
         </div>
       )}
 
-      {/* Blinkit Orders List */}
-      {!loading && orders.length === 0 && isLoggedIn && (
+      {/* Empty state */}
+      {!loading && orders.length === 0 && (
         <div className="card" style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)' }}>
-          <p style={{ fontSize: '0.85rem' }}>No recent Blinkit orders found.</p>
+          <p style={{ fontSize: '0.85rem' }}>No Blinkit orders synced yet.</p>
+          <p style={{ fontSize: '0.75rem', marginTop: '0.5rem', color: 'var(--text-dim)' }}>
+            Use the <strong>Splitwise Blinkit Sync Chrome Extension</strong> on blinkit.com to sync your orders.
+          </p>
         </div>
       )}
 
+      {/* Blinkit Orders List */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         {orders.map((order) => {
           const isSplit = Boolean(order.is_split);
