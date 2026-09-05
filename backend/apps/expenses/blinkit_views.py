@@ -424,9 +424,26 @@ def blinkit_sync_manual(request):
         if isinstance(json_data, str):
             json_data = json.loads(json_data)
         
-        parsed = extract_blinkit_orders_from_sdui(json_data)
-        if not parsed and isinstance(json_data, list):
-            parsed = json_data
+        # Support raw payload bundle: { "order_history": <raw>, "details_by_order_id": { <order_id>: <raw_dt_v2> } }
+        if isinstance(json_data, dict) and "order_history" in json_data:
+            history_raw = json_data.get("order_history")
+            details_map = json_data.get("details_by_order_id", {})
+            parsed = extract_blinkit_orders_from_sdui(history_raw)
+            for ord_item in parsed:
+                o_id = str(ord_item.get("order_id"))
+                dt_data = details_map.get(o_id)
+                if dt_data:
+                    parsed_dt = parse_blinkit_order_details_v2(dt_data)
+                    if parsed_dt and parsed_dt.get("item_details"):
+                        ord_item["item_details"] = parsed_dt["item_details"]
+                        ord_item["product_names"] = parsed_dt["product_names"]
+                        ord_item["other_charges"] = parsed_dt["other_charges"]
+                        if parsed_dt.get("total_amount") and parsed_dt["total_amount"] > 0:
+                            ord_item["total_amount"] = parsed_dt["total_amount"]
+        else:
+            parsed = extract_blinkit_orders_from_sdui(json_data)
+            if not parsed and isinstance(json_data, list):
+                parsed = json_data
 
         merged = OrderStoreManager.save_and_merge_orders(u, "BLINKIT", parsed)
         cache = get_blinkit_order_cache(u.phone_number)
