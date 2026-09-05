@@ -34,6 +34,8 @@ blinkit_mcp/
 !frontend/package-lock.json
 !frontend/tsconfig.json
 !backend/**/fixtures/*.json
+!tools/chrome_extension/*.json
+!**/manifest.json
 
 # Environment variables
 .env
