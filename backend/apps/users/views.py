@@ -24,7 +24,7 @@ class UserProfileViewSet(viewsets.ModelViewSet):
                     "username": "rahul",
                     "name": "Rahul",
                     "email": "rahul@example.com",
-                    "phone_number": "9876543210",
+                    "phone_number": "9994953206",
                     "password": "10",
                     "avatar_url": "https://api.dicebear.com/7.x/avataaars/svg?seed=Rahul"
                 },

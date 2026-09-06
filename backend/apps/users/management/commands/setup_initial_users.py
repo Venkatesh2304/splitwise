@@ -8,7 +8,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         initial_users_data = [
             {"username": "venkatesh", "name": "Venkatesh", "phone_number": "6382247549", "email": "venkatesh@example.com"},
-            {"username": "rahul", "name": "Rahul", "phone_number": "9876543210", "email": "rahul@example.com"},
+            {"username": "rahul", "name": "Rahul", "phone_number": "9994953206", "email": "rahul@example.com"},
             {"username": "akash", "name": "Akash", "phone_number": "7339569334", "email": "akash@example.com"},
             {"username": "anish", "name": "Anish", "phone_number": "9876543212", "email": "anish@example.com"},
             {"username": "aathesh", "name": "Aathesh", "phone_number": "9965817968", "email": "aathesh@example.com"},
