@@ -19,7 +19,17 @@ from apps.expenses.blinkit_views import get_user_profile_by_req
 
 MCP_BASE = "https://mcp.swiggy.com"
 
-def clean_placed_at(status_text):
+from datetime import datetime
+
+def clean_placed_at(status_text, created_at_raw=None):
+    if created_at_raw:
+        try:
+            dt_str = str(created_at_raw).replace("Z", "+00:00")
+            dt = datetime.fromisoformat(dt_str)
+            return dt.strftime("%d %b %Y, %I:%M %p")
+        except Exception:
+            pass
+
     if not status_text:
         return "Recently"
     text = str(status_text)
@@ -192,8 +202,9 @@ def parse_swiggy_orders_json(resp_json, headers=None):
         bill = ord_item.get("billDetails") or {}
         tot_amt = float(ord_item.get("totalAmount") or ord_item.get("order_total") or ord_item.get("total_amount") or bill.get("grandTotal") or 0.0)
         
-        placed_raw = ord_item.get("currentStatus") or ord_item.get("order_status_text") or ord_item.get("createdAt") or ord_item.get("placed_at")
-        placed_clean = clean_placed_at(placed_raw)
+        created_raw = ord_item.get("createdAt") or ord_item.get("orderTime") or ord_item.get("created_at") or ord_item.get("order_time")
+        status_raw = ord_item.get("currentStatus") or ord_item.get("order_status_text") or ord_item.get("status") or ord_item.get("placed_at")
+        placed_clean = clean_placed_at(status_raw, created_at_raw=created_raw)
 
         items_raw = ord_item.get("order_items") or ord_item.get("items") or []
         item_total = float(bill.get("itemTotal") or bill.get("item_total") or tot_amt)

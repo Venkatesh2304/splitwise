@@ -11,7 +11,18 @@ def _sort_orders_descending(orders_list: List[Dict[str, Any]]) -> List[Dict[str,
     def get_sort_key(o):
         placed_at = str(o.get("placed_at") or "").strip()
         ord_id = str(o.get("order_id") or "").strip()
+        full_json = o.get("full_order_json") or o.get("raw_payload") or {}
 
+        # 1. Try ISO createdAt / orderTime from raw payload first
+        created_at_raw = full_json.get("createdAt") or full_json.get("orderTime") or full_json.get("order_time") or full_json.get("created_at")
+        if created_at_raw:
+            try:
+                dt_str = str(created_at_raw).replace("Z", "+00:00")
+                return (datetime.fromisoformat(dt_str).timestamp(), ord_id)
+            except Exception:
+                pass
+
+        # 2. Try placed_at date string
         clean_d = placed_at
         if clean_d.lower().startswith("today"):
             clean_d = re.sub(r'^today', now.strftime("%d %b %Y"), clean_d, flags=re.IGNORECASE)
@@ -22,7 +33,7 @@ def _sort_orders_descending(orders_list: List[Dict[str, Any]]) -> List[Dict[str,
 
         clean_d = clean_d.replace(",", "")
 
-        for fmt in ("%d %b %Y %I:%M %p", "%d %b %I:%M %p %Y", "%d %b %Y", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        for fmt in ("%d %b %Y %I:%M %p", "%d %b %I:%M %p %Y", "%d %b %Y", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
             try:
                 return (datetime.strptime(clean_d, fmt).timestamp(), ord_id)
             except Exception:
@@ -44,10 +55,8 @@ class OrderStoreManager:
     Platform-Agnostic Order Storage & Merging Manager.
     
     Guarantees across all Quick Commerce platforms (Swiggy, Blinkit, etc.):
-    1. Order Immutability: Once an order with a given order_id is saved for a user,
-       its details are NEVER modified, edited, or overwritten upon refresh.
-    2. Additive Persistence: Old orders missing from fresh API responses (e.g. Swiggy 15-day limit)
-       remain permanently saved in the Database.
+    1. Robust Order Persistence & Updates: Fresh orders insert new records or update transient status text/items.
+    2. Additive Persistence: Old orders missing from fresh API responses (e.g. Swiggy MCP limits) remain permanently saved in DB.
     3. Multi-User & Multi-Platform Isolation.
     4. Chronological Descending Ordering (Newest orders first).
     """
@@ -57,7 +66,7 @@ class OrderStoreManager:
         if not user_profile:
             return []
 
-        # 1. Iterate through fresh orders and insert NEW ones only (get_or_create)
+        # 1. Iterate through fresh orders and insert NEW ones or update existing transient ones
         for fresh_ord in (fresh_orders or []):
             ord_id = str(fresh_ord.get("order_id") or fresh_ord.get("id") or "").strip()
             if not ord_id or ord_id == "None":
@@ -69,7 +78,6 @@ class OrderStoreManager:
             prod_names = fresh_ord.get("product_names") or []
             item_details = fresh_ord.get("item_details") or []
 
-            # get_or_create ensures that if (user, platform, order_id) exists, it is NEVER modified!
             rec, created = GroceryOrderRecord.objects.get_or_create(
                 user=user_profile,
                 platform=platform,
@@ -84,6 +92,33 @@ class OrderStoreManager:
                     "full_order_json": fresh_ord
                 }
             )
+
+            if not created:
+                updated = False
+                transient_keywords = ["confirmed", "placed", "transit", "recently", "pending"]
+                is_existing_transient = not rec.placed_at or any(kw in str(rec.placed_at).lower() for kw in transient_keywords) or not re.search(r'\d', str(rec.placed_at))
+                
+                if placed_at and (is_existing_transient or placed_at != rec.placed_at):
+                    if not any(kw in str(placed_at).lower() for kw in transient_keywords) or is_existing_transient:
+                        rec.placed_at = placed_at
+                        updated = True
+
+                if item_details and (not rec.item_details or len(rec.item_details) < len(item_details)):
+                    rec.item_details = item_details
+                    rec.product_names = prod_names or rec.product_names
+                    updated = True
+
+                if total_amt > 0 and (rec.total_amount == 0 or abs(rec.total_amount - total_amt) > 0.01):
+                    rec.total_amount = total_amt
+                    updated = True
+
+                if fresh_ord:
+                    rec.full_order_json = fresh_ord
+                    rec.raw_payload = fresh_ord
+                    updated = True
+
+                if updated:
+                    rec.save()
 
             # Create individual GroceryOrderItem line items for new order records
             if created and item_details:
