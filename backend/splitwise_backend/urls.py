@@ -7,6 +7,7 @@ from apps.groups.views import GroupViewSet
 from apps.expenses.views import ExpenseViewSet, SettlementViewSet
 from apps.expenses import blinkit_views
 from apps.expenses import swiggy_views
+from apps.notifications import views as push_views
 
 router = DefaultRouter()
 router.register(r'users', UserProfileViewSet, basename='user')
@@ -39,6 +40,12 @@ urlpatterns = [
     path('api/swiggy/split_order/', swiggy_views.swiggy_split_order, name='swiggy_split_order'),
     path('api/swiggy/remove_split/', swiggy_views.swiggy_remove_split, name='swiggy_remove_split'),
     path('api/swiggy/sync_manual/', swiggy_views.swiggy_sync_manual, name='swiggy_sync_manual'),
+
+    # Web push notifications
+    path('api/push/public_key/', push_views.push_public_key, name='push_public_key'),
+    path('api/push/subscribe/', push_views.push_subscribe, name='push_subscribe'),
+    path('api/push/unsubscribe/', push_views.push_unsubscribe, name='push_unsubscribe'),
+    path('api/push/test/', push_views.push_test, name='push_test'),
 
     # API router
     path('api/', include((router.urls, 'api'))),

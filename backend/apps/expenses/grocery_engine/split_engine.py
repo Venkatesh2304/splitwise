@@ -1,8 +1,10 @@
 import json
 from typing import Dict, Any, List, Optional
+from django.utils import timezone
 from apps.groups.models import Group
 from apps.users.models import UserProfile
 from apps.expenses.models import Expense, ExpensePayer, ExpenseShare
+from apps.notifications import events
 
 class GrocerySplitEngine:
     """Universal Splitting Engine for any Grocery Platform (Blinkit, Swiggy Instamart, Zepto, etc.)."""
@@ -18,7 +20,8 @@ class GrocerySplitEngine:
         item_splits_data: Optional[List[Dict[str, Any]]] = None,
         bill_split_data: Optional[Dict[str, Any]] = None,
         description: Optional[str] = None,
-        placed_at: Optional[str] = None
+        placed_at: Optional[str] = None,
+        actor_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Executes itemized or bill-level splitting, calculates exact proportional fee distributions,
@@ -138,11 +141,17 @@ class GrocerySplitEngine:
         placed_at_str = str(placed_at or "").strip()
         notes_dict = {
             "platform": platform_name,
+            "order_id": str(order_id),
             "split_mode": split_mode,
             "placed_at": placed_at_str,
             "items": products_json_list
         }
         notes_str = json.dumps(notes_dict)
+
+        # A pre-existing split for this order ID makes this a re-split (an edit):
+        # snapshot it for the notification before it's replaced.
+        previous = list(Expense.objects.filter(description__icontains=str(order_id)).order_by('created_at'))
+        before = events.snapshot_expense(previous[0]) if previous else None
 
         # Delete any pre-existing split for this order ID
         Expense.objects.filter(description__icontains=str(order_id)).delete()
@@ -173,6 +182,21 @@ class GrocerySplitEngine:
                     percentage=round((owed / total_amount) * 100, 2) if total_amount > 0 else 0.0
                 )
 
+        actor = events.resolve_actor(actor_id) or buyer
+        tag = f"order-{order_id}"
+        if before:
+            # Keep the original position in the timeline; mark it edited
+            Expense.objects.filter(pk=expense.pk).update(
+                date=previous[0].date,
+                created_at=previous[0].created_at,
+                updated_at=timezone.now(),
+                updated_by=actor,
+            )
+            expense.refresh_from_db()
+            events.expense_edited(before, expense, actor, tag=tag)
+        else:
+            events.expense_added(expense, actor, tag=tag)
+
         return {
             "message": f"Successfully split '{description}' into group '{group.name}'!",
             "expense_id": expense.id,
@@ -180,9 +204,14 @@ class GrocerySplitEngine:
         }
 
     @staticmethod
-    def remove_split(order_id: str) -> Dict[str, Any]:
+    def remove_split(order_id: str, actor_id: Optional[int] = None) -> Dict[str, Any]:
         """Deletes any expense corresponding to the given order ID."""
-        deleted_count, _ = Expense.objects.filter(description__icontains=str(order_id)).delete()
+        expenses = Expense.objects.filter(description__icontains=str(order_id))
+        snapshots = [events.snapshot_expense(e) for e in expenses]
+        deleted_count, _ = expenses.delete()
+        actor = events.resolve_actor(actor_id)
+        for snap in snapshots:
+            events.expense_deleted(snap, actor, tag=f"order-{order_id}")
         return {
             "ok": True,
             "message": f"Removed split for order #{order_id} ({deleted_count} expense deleted)."

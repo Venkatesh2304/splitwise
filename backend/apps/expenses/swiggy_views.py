@@ -463,7 +463,8 @@ def swiggy_split_order(request):
             item_splits_data=request.data.get("item_splits", []),
             bill_split_data=request.data.get("bill_split", {}),
             description=request.data.get("description"),
-            placed_at=request.data.get("placed_at")
+            placed_at=request.data.get("placed_at"),
+            actor_id=request.data.get("actor_id")
         )
         return Response(res, status=status.HTTP_201_CREATED)
     except Exception as e:
@@ -475,5 +476,5 @@ def swiggy_remove_split(request):
     if not order_id:
         return Response({"error": "order_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-    res = GrocerySplitEngine.remove_split(order_id)
+    res = GrocerySplitEngine.remove_split(order_id, actor_id=request.data.get("actor_id"))
     return Response(res, status=status.HTTP_200_OK)

@@ -46,7 +46,12 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5002",
     "http://localhost:5173",
     "http://localhost:8000",
+    # HTTPS hostname in front of nginx (see NOTIFICATIONS_SETUP.md)
+    "https://*.duckdns.org",
 ]
+
+# nginx terminates TLS and forwards the original scheme
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -65,6 +70,7 @@ INSTALLED_APPS = [
     'apps.users',
     'apps.groups',
     'apps.expenses',
+    'apps.notifications',
 ]
 
 MIDDLEWARE = [
@@ -126,3 +132,6 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.BrowsableAPIRenderer' if DEBUG else 'rest_framework.renderers.JSONRenderer',
     ]
 }
+
+# Web push (VAPID) key lives outside git; created by `manage.py ensure_vapid_keys`
+PUSH_KEYS_DIR = BASE_DIR / 'push_keys'
