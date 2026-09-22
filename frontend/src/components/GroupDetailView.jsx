@@ -1,9 +1,81 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { useUser } from '../context/UserContext';
-import { ArrowLeft, Plus, HandCoins, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight } from 'lucide-react';
 
-export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onOpenSettleUp, currentUser }) {
+const userIdOf = (row) => (row && row.user && row.user.id) ?? (row ? row.user_id : null);
+const firstName = (user) => (user && user.name ? user.name.split(' ')[0] : 'Someone');
+
+// Whole rupees like the rest of the app, but never show a real amount as "0"
+const shortAmount = (n) => {
+  const abs = Math.abs(n);
+  return Math.round(abs) > 0 ? Math.round(abs) : abs.toFixed(2);
+};
+
+function relativeTime(iso) {
+  if (!iso) return '';
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return '';
+  const secs = (Date.now() - then.getTime()) / 1000;
+  if (secs < 60) return 'just now';
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  if (secs < 2 * 86400) return 'yesterday';
+  if (secs < 7 * 86400) return `${Math.floor(secs / 86400)}d ago`;
+  return then.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
+
+function isGrocerySplit(exp) {
+  try {
+    const notes = JSON.parse(exp.notes || '');
+    return Boolean(notes && notes.platform);
+  } catch {
+    return false;
+  }
+}
+
+// Who actually paid (not who typed it in)
+function payersOf(exp) {
+  return (exp.payers || []).filter(p => (parseFloat(p.amount_paid) || 0) > 0);
+}
+
+function payerSummary(exp, myUserId, members) {
+  const payers = payersOf(exp);
+  if (payers.length === 0) return exp.created_by ? (exp.created_by.id === myUserId ? 'You' : firstName(exp.created_by)) : 'Someone';
+  const firstId = userIdOf(payers[0]);
+  const name = firstId === myUserId ? 'You' : firstName(payers[0].user || members.find(m => m.id === firstId));
+  return payers.length > 1 ? `${name} & ${payers.length - 1} other${payers.length > 2 ? 's' : ''}` : name;
+}
+
+// What this expense means for me: paid minus my share
+function myPosition(exp, myUserId) {
+  const paid = payersOf(exp).filter(p => userIdOf(p) === myUserId).reduce((sum, p) => sum + (parseFloat(p.amount_paid) || 0), 0);
+  const share = (exp.shares || []).find(sh => userIdOf(sh) === myUserId);
+  const owed = share ? parseFloat(share.amount_owed) || 0 : 0;
+  return { paid, owed, net: paid - owed, involved: paid > 0.005 || owed > 0.005 };
+}
+
+function addedLine(item, myUserId) {
+  const who = (u) => (u && u.id === myUserId ? 'you' : firstName(u));
+  const parts = [];
+  if (item.created_by) parts.push(`${item.kind === 'settlement' ? 'Recorded' : 'Added'} by ${who(item.created_by)}`);
+  if (item.created_at) parts.push(relativeTime(item.created_at));
+  if (item.updated_at) parts.push(item.updated_by ? `edited by ${who(item.updated_by)}` : 'edited');
+  return parts.filter(Boolean).join(' · ');
+}
+
+export default function GroupDetailView({
+  groupId,
+  onBack,
+  onOpenAddExpense,
+  onOpenSettleUp,
+  onOpenBlinkit,
+  onEditExpense,
+  currentUser,
+  refreshToken = 0,
+  focusExpenseId = null,
+  onFocusHandled
+}) {
   const { activeUser } = useUser();
   const [groupData, setGroupData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -13,10 +85,13 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
   // Selected expense for detailed view modal
   const [selectedExpenseDetails, setSelectedExpenseDetails] = useState(null);
   const [modalTab, setModalTab] = useState('overall'); // 'overall' | 'items'
+  const [selectedSettlement, setSelectedSettlement] = useState(null);
 
+  const actorId = (currentUser || activeUser)?.id;
+
+  // Only the first load shows "Loading…"; refreshes swap the data in place
   const fetchDetail = async () => {
     try {
-      setLoading(true);
       setError(null);
       const data = await api.getGroupDetail(groupId);
       setGroupData(data);
@@ -32,19 +107,46 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
     if (groupId) {
       fetchDetail();
     }
-  }, [groupId]);
+  }, [groupId, refreshToken]);
+
+  // Keep an open detail modal in step with fresh data; open the expense a notification pointed at
+  useEffect(() => {
+    if (!groupData) return;
+    const expenses = groupData.expenses || [];
+    setSelectedExpenseDetails(current => (current ? expenses.find(e => e.id === current.id) || null : current));
+    if (focusExpenseId) {
+      const target = expenses.find(e => e.id === focusExpenseId);
+      if (target) {
+        setActiveTab('expenses');
+        setSelectedExpenseDetails(target);
+        setModalTab('overall');
+      }
+      if (onFocusHandled) onFocusHandled();
+    }
+  }, [groupData, focusExpenseId]);
 
   const handleDeleteExpense = async (e, expId) => {
     e.stopPropagation();
     if (!window.confirm('Delete this expense from the group?')) return;
     try {
-      await api.deleteExpense(expId);
+      await api.deleteExpense(expId, actorId);
       if (selectedExpenseDetails && selectedExpenseDetails.id === expId) {
         setSelectedExpenseDetails(null);
       }
       fetchDetail();
     } catch (err) {
       alert('Failed to delete expense.');
+    }
+  };
+
+  const handleDeleteSettlement = async (settlementId) => {
+    if (!window.confirm('Delete this settle-up payment? Balances will go back to how they were before it.')) return;
+    try {
+      await api.deleteSettlement(settlementId, actorId);
+      setSelectedSettlement(null);
+      fetchDetail();
+    } catch (err) {
+      alert('Failed to delete payment.');
     }
   };
 
@@ -128,13 +230,28 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
     return str.replace(/\s*\d{4}\b/g, '').trim() || '30 Aug';
   };
 
-  // Group expenses by date
-  const groupedExpenses = {};
-  expenses.forEach(exp => {
-    const dateKey = formatDateGroupKey(exp);
-    if (!groupedExpenses[dateKey]) groupedExpenses[dateKey] = [];
-    groupedExpenses[dateKey].push(exp);
+  // One timeline: expenses and settle-up payments, newest first, grouped by date
+  const settlements = groupData.settlements || [];
+  const activity = [
+    ...expenses.map(exp => ({ ...exp, kind: 'expense' })),
+    ...settlements.map(st => ({ ...st, kind: 'settlement' }))
+  ].sort((a, b) => {
+    const byDate = String(b.date || '').localeCompare(String(a.date || ''));
+    return byDate !== 0 ? byDate : String(b.created_at || '').localeCompare(String(a.created_at || ''));
   });
+
+  const groupedActivity = {};
+  activity.forEach(item => {
+    const dateKey = formatDateGroupKey(item);
+    if (!groupedActivity[dateKey]) groupedActivity[dateKey] = [];
+    groupedActivity[dateKey].push(item);
+  });
+
+  const memberName = (user, id) => {
+    const uid = user ? user.id : id;
+    if (uid === myUserId) return 'You';
+    return firstName(user || members.find(m => m.id === uid));
+  };
 
   // Helper to parse itemized products out of expense notes or description fallback
   const getExpenseProducts = (exp) => {
@@ -240,7 +357,7 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
           className={`tab-btn ${activeTab === 'expenses' ? 'active' : ''}`}
           onClick={() => setActiveTab('expenses')}
         >
-          All Expenses ({expenses.length})
+          Activity ({activity.length})
         </button>
         <button
           className={`tab-btn ${activeTab === 'breakdown' ? 'active' : ''}`}
@@ -251,14 +368,14 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
       </div>
 
       {activeTab === 'expenses' ? (
-        /* TAB 1: LIST OF EXPENSES GROUPED BY DATE (Clean "28 Aug" format, no icons, no trash button) */
-        expenses.length === 0 ? (
+        /* TAB 1: ACTIVITY — expenses and settle-ups grouped by date ("28 Aug") */
+        activity.length === 0 ? (
           <div className="card" style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)' }}>
             <p style={{ fontSize: '0.85rem' }}>No expenses recorded yet.</p>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-            {Object.entries(groupedExpenses).map(([dateLabel, dateItems]) => (
+            {Object.entries(groupedActivity).map(([dateLabel, dateItems]) => (
               <div key={dateLabel}>
                 {/* Date Group Header in "28 Aug" format */}
                 <div style={{
@@ -272,58 +389,86 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                  {dateItems.map((exp) => {
+                  {dateItems.map((item) => {
+                    const meta = addedLine(item, myUserId);
+
+                    if (item.kind === 'settlement') {
+                      const amt = parseFloat(item.amount) || 0;
+                      const iPaid = item.payer && item.payer.id === myUserId;
+                      const iReceived = item.payee && item.payee.id === myUserId;
+                      const label = iReceived ? 'you received' : iPaid ? 'you paid' : 'settle-up';
+                      const color = iReceived ? 'var(--color-positive)' : iPaid ? '#ffffff' : 'var(--text-dim)';
+                      return (
+                        <div
+                          key={`settlement-${item.id}`}
+                          className="card"
+                          onClick={() => setSelectedSettlement(item)}
+                          style={{ padding: '0.85rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', cursor: 'pointer' }}
+                        >
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              💸 {memberName(item.payer)} paid {memberName(item.payee)}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {meta || 'Settle-up payment'}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                            <div style={{ textAlign: 'right' }}>
+                              <div style={{ fontSize: '0.7rem', color }}>{label}</div>
+                              <div style={{ fontSize: '1.05rem', fontWeight: 800, color }}>{currency}{shortAmount(amt)}</div>
+                            </div>
+                            <ChevronRight size={16} color="var(--text-dim)" />
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    const exp = item;
                     const totalAmt = parseFloat(exp.amount) || 0;
-                    const payer = exp.created_by || (exp.payers && exp.payers[0] ? exp.payers[0].user : null);
-                    const payerName = payer ? (payer.id === myUserId ? 'You' : payer.name.split(' ')[0]) : 'Someone';
-                    const myShareObj = exp.shares ? exp.shares.find(s => (s.user_id || s.user?.id) === myUserId) : null;
-                    const myOwed = myShareObj ? parseFloat(myShareObj.amount_owed) : 0;
+                    const mine = myPosition(exp, myUserId);
+                    let label, color, value;
+                    if (!mine.involved) {
+                      label = 'not involved'; color = 'var(--text-dim)'; value = null;
+                    } else if (mine.net > 0.005) {
+                      label = 'you lent'; color = 'var(--color-positive)'; value = mine.net;
+                    } else if (mine.net < -0.005) {
+                      label = 'you borrowed'; color = 'var(--color-negative)'; value = mine.net;
+                    } else {
+                      label = 'no balance'; color = 'var(--text-dim)'; value = null;
+                    }
 
                     return (
                       <div
-                        key={exp.id}
+                        key={`expense-${exp.id}`}
                         className="card"
-                        style={{ padding: '0.85rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}
+                        onClick={() => handleOpenExpenseModal(exp)}
+                        style={{ padding: '0.85rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', cursor: 'pointer' }}
                       >
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {getCleanTitle(exp.description)}
                           </div>
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
-                            Paid by <strong style={{ color: '#ffffff' }}>{payerName}</strong>
+                            <strong style={{ color: '#ffffff' }}>{payerSummary(exp, myUserId, members)}</strong> paid {currency}{shortAmount(totalAmt)}
                           </div>
+                          {meta && (
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {meta}
+                            </div>
+                          )}
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-                          <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                            {myOwed > 0 ? (
-                              <>
-                                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--color-negative)' }}>
-                                  {currency}{Math.round(myOwed)}
-                                </div>
-                                <div style={{ fontSize: '0.725rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
-                                  Total: {currency}{Math.round(totalAmt)}
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-dim)' }}>
-                                  {currency}0
-                                </div>
-                                <div style={{ fontSize: '0.725rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
-                                  Total: {currency}{Math.round(totalAmt)}
-                                </div>
-                              </>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '0.7rem', color }}>{label}</div>
+                            {value !== null && (
+                              <div style={{ fontSize: '1.05rem', fontWeight: 800, color }}>
+                                {currency}{shortAmount(value)}
+                              </div>
                             )}
                           </div>
-
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => handleOpenExpenseModal(exp)}
-                            style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}
-                          >
-                            View
-                          </button>
+                          <ChevronRight size={16} color="var(--text-dim)" />
                         </div>
                       </div>
                     );
@@ -427,12 +572,21 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
                         fontSize: '0.825rem'
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#ffffff' }}>
-                        <strong>{fromName}</strong> owes <strong>{toName}</strong>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#ffffff', minWidth: 0 }}>
+                        <strong>{fromName}</strong> {fromIsMe ? 'owe' : 'owes'} <strong>{toName}</strong>
                       </div>
-                      <span style={{ fontWeight: 800, color: 'var(--accent-primary)' }}>
-                        {currency}{Math.round(d.amount)}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0 }}>
+                        <span style={{ fontWeight: 800, color: 'var(--accent-primary)' }}>
+                          {currency}{Math.round(d.amount)}
+                        </span>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => onOpenSettleUp(groupData, d.from_user_id, d.to_user_id, Number(d.amount).toFixed(2))}
+                          style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+                        >
+                          Settle
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -443,7 +597,7 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
                   style={{ marginTop: '0.5rem', width: '100%' }}
                 >
                   <HandCoins size={14} />
-                  <span>Settle Up Debt</span>
+                  <span>Record a different amount</span>
                 </button>
               </div>
             )}
@@ -517,8 +671,19 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
                   <div style={{ padding: '0.65rem 0.85rem', backgroundColor: 'rgba(15, 23, 42, 0.6)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', fontSize: '0.825rem' }}>
                     <span style={{ color: 'var(--text-dim)' }}>Paid by: </span>
                     <strong style={{ color: '#ffffff' }}>
-                      {selectedExpenseDetails.created_by ? selectedExpenseDetails.created_by.name : 'Group Member'}
+                      {payersOf(selectedExpenseDetails).length > 0
+                        ? payersOf(selectedExpenseDetails).map(pay => {
+                            const pUser = pay.user || members.find(m => m.id === pay.user_id);
+                            const name = pUser ? pUser.name : 'Group Member';
+                            return payersOf(selectedExpenseDetails).length > 1 ? `${name} (${currency}${shortAmount(parseFloat(pay.amount_paid))})` : name;
+                          }).join(', ')
+                        : (selectedExpenseDetails.created_by ? selectedExpenseDetails.created_by.name : 'Group Member')}
                     </strong>
+                    {addedLine({ ...selectedExpenseDetails, kind: 'expense' }, myUserId) && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
+                        {addedLine({ ...selectedExpenseDetails, kind: 'expense' }, myUserId)}
+                      </div>
+                    )}
                   </div>
 
                   <h4 style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
@@ -710,10 +875,75 @@ export default function GroupDetailView({ groupId, onBack, onOpenAddExpense, onO
                 style={{ color: 'var(--color-negative)', border: '1px solid rgba(239, 68, 68, 0.3)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
               >
                 <Trash2 size={14} />
-                <span>Delete Expense</span>
+                <span>Delete</span>
               </button>
 
-              <button className="btn btn-secondary btn-sm" onClick={() => setSelectedExpenseDetails(null)}>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {isGrocerySplit(selectedExpenseDetails) ? (
+                  onOpenBlinkit && (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => { setSelectedExpenseDetails(null); onOpenBlinkit(); }}
+                      title="Grocery orders are changed with Re-Split in Quick Grocery Apps"
+                    >
+                      Re-split order
+                    </button>
+                  )
+                ) : (
+                  onEditExpense && (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => { const exp = selectedExpenseDetails; setSelectedExpenseDetails(null); onEditExpense(exp, groupData); }}
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                    >
+                      <Pencil size={14} />
+                      <span>Edit</span>
+                    </button>
+                  )
+                )}
+
+                <button className="btn btn-secondary btn-sm" onClick={() => setSelectedExpenseDetails(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SETTLE-UP PAYMENT DETAILS MODAL */}
+      {selectedSettlement && (
+        <div className="modal-overlay" onClick={() => setSelectedSettlement(null)}>
+          <div className="modal-content" style={{ maxWidth: '420px' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#ffffff' }}>Settle-up Payment</h3>
+              <button onClick={() => setSelectedSettlement(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '1rem' }}>
+              <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffffff' }}>
+                💸 {memberName(selectedSettlement.payer)} paid {memberName(selectedSettlement.payee)}
+              </div>
+              <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--accent-primary)', margin: '0.35rem 0 0.75rem' }}>
+                {currency}{(parseFloat(selectedSettlement.amount) || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span>Date: <span style={{ color: '#ffffff' }}>{formatDateGroupKey(selectedSettlement)}</span></span>
+                {selectedSettlement.notes && <span>Note: <span style={{ color: '#ffffff' }}>{selectedSettlement.notes}</span></span>}
+                {addedLine(selectedSettlement, myUserId) && <span>{addedLine(selectedSettlement, myUserId)}</span>}
+              </div>
+            </div>
+            <div className="modal-footer" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleDeleteSettlement(selectedSettlement.id)}
+                style={{ color: 'var(--color-negative)', border: '1px solid rgba(239, 68, 68, 0.3)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              >
+                <Trash2 size={14} />
+                <span>Delete</span>
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setSelectedSettlement(null)}>
                 Close
               </button>
             </div>

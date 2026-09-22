@@ -78,7 +78,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       const res = await fetch(`${API_BASE_URL}/blinkit/remove_split/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_id: String(orderId) })
+        body: JSON.stringify({ order_id: String(orderId), actor_id: currentUser?.id })
       });
 
       if (res.ok) {

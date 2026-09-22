@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { UserProvider, useUser } from './context/UserContext';
 import { api } from './services/api';
+import { getPushState, enablePush, disablePush, resyncPush } from './services/push';
 
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
@@ -17,6 +18,18 @@ import AddMemberToGroupModal from './components/AddMemberToGroupModal';
 
 import { LayoutDashboard, ShoppingBag, ShoppingCart, LogOut, Plus } from 'lucide-react';
 
+// A notification opens /?group=<id>&expense=<id>
+function readDeepLink(url) {
+  try {
+    const params = new URL(url, window.location.origin).searchParams;
+    const group = parseInt(params.get('group'), 10);
+    const expense = parseInt(params.get('expense'), 10);
+    return { groupId: Number.isNaN(group) ? null : group, expenseId: Number.isNaN(expense) ? null : expense };
+  } catch {
+    return { groupId: null, expenseId: null };
+  }
+}
+
 function AppContent() {
   const { setActiveUser } = useUser();
   const [currentUser, setCurrentUser] = useState(() => {
@@ -26,8 +39,12 @@ function AppContent() {
 
   const [demoUsers, setDemoUsers] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [activeGroupId, setActiveGroupId] = useState(null);
+  const [initialLink] = useState(() => readDeepLink(window.location.href));
+  const [activeGroupId, setActiveGroupId] = useState(initialLink.groupId);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'blinkit'
+  const [focusExpenseId, setFocusExpenseId] = useState(initialLink.expenseId);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [pushState, setPushState] = useState('checking');
 
   // Modal visibility states
   const [isAddGroupOpen, setIsAddGroupOpen] = useState(false);
@@ -38,6 +55,7 @@ function AppContent() {
 
   // Contextual data for modals
   const [selectedExpenseGroup, setSelectedExpenseGroup] = useState(null);
+  const [editingExpense, setEditingExpense] = useState(null);
   const [settleModalData, setSettleModalData] = useState({
     group: null,
     payerId: null,
@@ -64,10 +82,66 @@ function AppContent() {
     }
   };
 
+  // Reload groups and whichever group is on screen
+  const refreshAll = useCallback(() => {
+    fetchGroups();
+    setRefreshToken((t) => t + 1);
+  }, []);
+
   useEffect(() => {
     fetchUsers();
     fetchGroups();
+    if (initialLink.groupId !== null) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
   }, []);
+
+  // Notifications: current state, and keep this device filed under the logged-in user
+  useEffect(() => {
+    if (!currentUser) return;
+    getPushState().then(setPushState);
+    resyncPush(currentUser);
+  }, [currentUser?.id]);
+
+  // Messages from the service worker: a push arrived, or a notification was tapped
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onMessage = (event) => {
+      const msg = event.data || {};
+      if (msg.type === 'splitwise:changed') {
+        refreshAll();
+      } else if (msg.type === 'splitwise:open') {
+        const link = readDeepLink(msg.url);
+        if (link.groupId !== null) {
+          setActiveTab('dashboard');
+          setActiveGroupId(link.groupId);
+          setFocusExpenseId(link.expenseId);
+        }
+        refreshAll();
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [refreshAll]);
+
+  const handleEnablePush = async () => {
+    const state = await enablePush(currentUser);
+    setPushState(state);
+    return 'Done. Tap “Send test” to check it works.';
+  };
+
+  const handleDisablePush = async () => {
+    await disablePush();
+    setPushState(await getPushState());
+    return 'Notifications are off for this device.';
+  };
+
+  const handleTestPush = async () => {
+    const res = await api.pushTest(currentUser.id);
+    if (!res.devices) throw new Error('This device isn’t registered. Turn notifications off and on again.');
+    if (!res.sent) throw new Error('The push service rejected it. Turn notifications off and on again.');
+    return `Sent. It should appear in a few seconds${res.devices > 1 ? ` (on all ${res.devices} of your devices)` : ''}.`;
+  };
 
   const handleLoginSuccess = (userObj) => {
     setCurrentUser(userObj);
@@ -77,6 +151,9 @@ function AppContent() {
   };
 
   const handleLogout = () => {
+    // A shared phone shouldn't keep receiving the previous user's notifications
+    disablePush();
+    setPushState('off');
     setCurrentUser(null);
     if (setActiveUser) setActiveUser(null);
     localStorage.removeItem('splitwise_user');
@@ -93,7 +170,14 @@ function AppContent() {
   };
 
   const handleOpenAddExpense = (targetGroup = null) => {
+    setEditingExpense(null);
     setSelectedExpenseGroup(targetGroup);
+    setIsAddExpenseOpen(true);
+  };
+
+  const handleOpenEditExpense = (expense, group) => {
+    setEditingExpense(expense);
+    setSelectedExpenseGroup(group);
     setIsAddExpenseOpen(true);
   };
 
@@ -132,6 +216,10 @@ function AppContent() {
         onOpenAddGroup={() => setIsAddGroupOpen(true)}
         onOpenAddExpense={() => handleOpenAddExpense(activeGroup || groceriesGroup)}
         onLogout={handleLogout}
+        pushState={pushState}
+        onEnablePush={handleEnablePush}
+        onDisablePush={handleDisablePush}
+        onTestPush={handleTestPush}
       />
 
       <div className="app-main">
@@ -156,6 +244,8 @@ function AppContent() {
               onSelectGroup={handleGroupSelect}
               onOpenAddGroup={() => setIsAddGroupOpen(true)}
               onOpenAddExpense={() => handleOpenAddExpense(null)}
+              pushState={pushState}
+              onEnablePush={handleEnablePush}
             />
           ) : (
             <GroupDetailView
@@ -167,6 +257,10 @@ function AppContent() {
               onOpenSettleUp={(g, p1, p2, amt) => handleOpenSettleUp(g, p1, p2, amt)}
               onOpenAddMember={(g) => handleOpenAddMemberToGroup(g)}
               onOpenBlinkit={() => setActiveTab('blinkit')}
+              onEditExpense={(exp, g) => handleOpenEditExpense(exp, g)}
+              refreshToken={refreshToken}
+              focusExpenseId={focusExpenseId}
+              onFocusHandled={() => setFocusExpenseId(null)}
             />
           )}
         </main>
@@ -258,15 +352,11 @@ function AppContent() {
 
       <AddExpenseModal
         isOpen={isAddExpenseOpen}
-        onClose={() => setIsAddExpenseOpen(false)}
+        onClose={() => { setIsAddExpenseOpen(false); setEditingExpense(null); }}
         groups={groups}
         activeGroup={selectedExpenseGroup || activeGroup || groceriesGroup}
-        onExpenseAdded={() => {
-          fetchGroups();
-          const curr = activeGroupId;
-          setActiveGroupId(null);
-          setTimeout(() => setActiveGroupId(curr), 50);
-        }}
+        editingExpense={editingExpense}
+        onExpenseAdded={refreshAll}
       />
 
       <SettleUpModal
@@ -276,12 +366,7 @@ function AppContent() {
         initialPayerId={settleModalData.payerId}
         initialPayeeId={settleModalData.payeeId}
         initialAmount={settleModalData.amount}
-        onSettlementRecorded={() => {
-          fetchGroups();
-          const curr = activeGroupId;
-          setActiveGroupId(null);
-          setTimeout(() => setActiveGroupId(curr), 50);
-        }}
+        onSettlementRecorded={refreshAll}
       />
 
       <UserModal
@@ -293,12 +378,7 @@ function AppContent() {
         isOpen={isAddMemberToGroupOpen}
         onClose={() => setIsAddMemberToGroupOpen(false)}
         group={activeGroupData}
-        onMemberAdded={() => {
-          fetchGroups();
-          const curr = activeGroupId;
-          setActiveGroupId(null);
-          setTimeout(() => setActiveGroupId(curr), 50);
-        }}
+        onMemberAdded={refreshAll}
       />
     </div>
   );

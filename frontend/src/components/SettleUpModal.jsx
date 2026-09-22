@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { useUser } from '../context/UserContext';
 import { X, HandCoins, ArrowRight } from 'lucide-react';
 
 export default function SettleUpModal({ isOpen, onClose, group, initialPayerId, initialPayeeId, initialAmount, onSettlementRecorded }) {
+  const { activeUser } = useUser();
   const [payerId, setPayerId] = useState('');
   const [payeeId, setPayeeId] = useState('');
   const [amount, setAmount] = useState('');
@@ -14,12 +16,18 @@ export default function SettleUpModal({ isOpen, onClose, group, initialPayerId, 
   const members = group ? group.members || [] : [];
 
   useEffect(() => {
+    if (!isOpen) return;
+    setError(null);
     if (members.length >= 2) {
-      setPayerId(initialPayerId ? String(initialPayerId) : String(members[0].id));
-      setPayeeId(initialPayeeId ? String(initialPayeeId) : String(members[1].id));
+      // Default: you are paying someone else
+      const me = activeUser && members.find(m => m.id === activeUser.id);
+      const defaultPayer = me || members[0];
+      const defaultPayee = members.find(m => m.id !== defaultPayer.id);
+      setPayerId(initialPayerId ? String(initialPayerId) : String(defaultPayer.id));
+      setPayeeId(initialPayeeId ? String(initialPayeeId) : String(defaultPayee.id));
       setAmount(initialAmount ? String(initialAmount) : '');
     }
-  }, [group, initialPayerId, initialPayeeId, initialAmount]);
+  }, [isOpen, group, initialPayerId, initialPayeeId, initialAmount]);
 
   if (!isOpen || !group) return null;
 
@@ -43,7 +51,8 @@ export default function SettleUpModal({ isOpen, onClose, group, initialPayerId, 
         payee_id: parseInt(payeeId),
         amount: parseFloat(amount),
         date,
-        notes: notes.trim()
+        notes: notes.trim(),
+        actor_id: activeUser ? activeUser.id : undefined
       });
       onSettlementRecorded();
       onClose();

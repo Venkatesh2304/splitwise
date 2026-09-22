@@ -3,7 +3,11 @@ import { useUser } from '../context/UserContext';
 import { api } from '../services/api';
 import { X, Receipt, Calculator, Check, AlertCircle } from 'lucide-react';
 
-export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, onExpenseAdded }) {
+const EDITABLE_SPLIT_TYPES = ['EQUAL', 'EXACT', 'PERCENTAGE'];
+const userIdOf = (row) => (row.user && row.user.id) ?? row.user_id;
+
+// editingExpense: an existing manual expense to edit (null = add a new one)
+export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, onExpenseAdded, editingExpense = null }) {
   const { activeUser } = useUser();
 
   const [selectedGroupId, setSelectedGroupId] = useState('');
@@ -25,14 +29,17 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
   const groupMembers = currentGroup ? currentGroup.members || [] : [];
 
   useEffect(() => {
-    if (activeGroup) {
+    if (editingExpense) {
+      setSelectedGroupId(String(editingExpense.group_id));
+    } else if (activeGroup) {
       setSelectedGroupId(String(activeGroup.id));
     } else if (groups.length > 0 && !selectedGroupId) {
       setSelectedGroupId(String(groups[0].id));
     }
-  }, [activeGroup, groups]);
+  }, [activeGroup, groups, editingExpense]);
 
   useEffect(() => {
+    if (editingExpense) return; // filled from the expense instead (below)
     if (groupMembers.length > 0) {
       const allIds = groupMembers.map(m => m.id);
       setSelectedSplitMemberIds(allIds);
@@ -52,7 +59,43 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       });
       setCustomValues(initialCustom);
     }
-  }, [selectedGroupId, currentGroup]);
+  }, [selectedGroupId, currentGroup, editingExpense]);
+
+  // Each time the modal opens: a blank form to add, or the expense's values to edit
+  useEffect(() => {
+    if (!isOpen) return;
+    setError(null);
+    if (!editingExpense) {
+      setDescription('');
+      setAmount('');
+      setCategory('FOOD');
+      setDate(new Date().toISOString().split('T')[0]);
+      setSplitType('EQUAL');
+      return;
+    }
+
+    const shares = editingExpense.shares || [];
+    const payers = editingExpense.payers || [];
+    const type = EDITABLE_SPLIT_TYPES.includes(editingExpense.split_type) ? editingExpense.split_type : 'EXACT';
+    const memberIds = shares.map(userIdOf);
+
+    setDescription(editingExpense.description || '');
+    setAmount(String(parseFloat(editingExpense.amount)));
+    setCategory(editingExpense.category || 'OTHER');
+    setDate(editingExpense.date || new Date().toISOString().split('T')[0]);
+    setPaidById(payers.length > 0 ? String(userIdOf(payers[0])) : '');
+    setSplitType(type);
+    setSelectedSplitMemberIds(memberIds);
+
+    const custom = {};
+    shares.forEach(sh => {
+      const uid = userIdOf(sh);
+      if (type === 'EXACT') custom[uid] = String(parseFloat(sh.amount_owed));
+      else if (type === 'PERCENTAGE') custom[uid] = String(sh.percentage);
+      else custom[uid] = memberIds.length ? (100 / memberIds.length).toFixed(2) : '';
+    });
+    setCustomValues(custom);
+  }, [isOpen, editingExpense]);
 
   if (!isOpen) return null;
 
@@ -131,22 +174,31 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setSubmitting(true);
       setError(null);
 
-      await api.createExpense({
+      const expenseData = {
         group_id: currentGroup.id,
         description: description.trim(),
         amount: totalAmountNum,
         category,
         split_type: splitType,
-        created_by_id: activeUser ? activeUser.id : parseInt(paidById),
         date,
         payers,
-        shares
-      });
+        shares,
+        actor_id: activeUser ? activeUser.id : undefined
+      };
+
+      if (editingExpense) {
+        await api.updateExpense(editingExpense.id, expenseData);
+      } else {
+        await api.createExpense({
+          ...expenseData,
+          created_by_id: activeUser ? activeUser.id : parseInt(paidById)
+        });
+      }
 
       onExpenseAdded();
       onClose();
     } catch (err) {
-      setError(err.message || 'Failed to create expense.');
+      setError(err.message || (editingExpense ? 'Failed to save changes.' : 'Failed to create expense.'));
     } finally {
       setSubmitting(false);
     }
@@ -158,7 +210,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
         <div className="modal-header">
           <h3 style={{ fontSize: '1.2rem', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Receipt size={20} color="var(--accent-primary)" />
-            <span>Add Group Expense</span>
+            <span>{editingExpense ? 'Edit Expense' : 'Add Group Expense'}</span>
           </h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
             <X size={20} />
@@ -188,6 +240,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 className="form-select"
                 value={selectedGroupId}
                 onChange={(e) => setSelectedGroupId(e.target.value)}
+                disabled={Boolean(editingExpense)}
               >
                 {groups.map(g => (
                   <option key={g.id} value={g.id}>
@@ -207,7 +260,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                   placeholder="e.g. Dinner, Uber ride, Grocery bill"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  autoFocus
+                  autoFocus={!editingExpense}
                 />
               </div>
 
@@ -387,7 +440,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting ? 'Saving...' : 'Save Expense'}
+              {submitting ? 'Saving...' : (editingExpense ? 'Save Changes' : 'Save Expense')}
             </button>
           </div>
         </form>

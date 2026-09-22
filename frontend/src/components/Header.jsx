@@ -1,11 +1,16 @@
 import React from 'react';
 import { LogOut } from 'lucide-react';
+import NotificationBell from './NotificationBell';
 
 export default function Header({
   currentUser,
   activeTab,
   onTabChange,
-  onLogout
+  onLogout,
+  pushState,
+  onEnablePush,
+  onDisablePush,
+  onTestPush
 }) {
   return (
     <header style={{
@@ -27,8 +32,17 @@ export default function Header({
         </span>
       </div>
 
-      {/* Right Actions: User Profile & Logout */}
+      {/* Right Actions: Notifications, User Profile & Logout */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        {currentUser && (
+          <NotificationBell
+            state={pushState}
+            onEnable={onEnablePush}
+            onDisable={onDisablePush}
+            onTest={onTestPush}
+          />
+        )}
+
         {currentUser && (
           <div style={{
             display: 'flex',

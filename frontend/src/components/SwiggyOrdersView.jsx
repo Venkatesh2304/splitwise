@@ -79,7 +79,7 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
       const res = await fetch(`${API_BASE_URL}/swiggy/remove_split/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_id: String(orderId) })
+        body: JSON.stringify({ order_id: String(orderId), actor_id: currentUser?.id })
       });
 
       if (res.ok) {

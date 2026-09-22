@@ -66,10 +66,25 @@ export const api = {
     body: { user_id: userId }
   }),
 
-  // Expenses
+  // Expenses (actor_id = who is making the change; they aren't notified about it)
   createExpense: (expenseData) => request('/expenses/', { method: 'POST', body: expenseData }),
-  deleteExpense: (id) => request(`/expenses/${id}/`, { method: 'DELETE' }),
+  updateExpense: (id, expenseData) => request(`/expenses/${id}/`, { method: 'PUT', body: expenseData }),
+  deleteExpense: (id, actorId) => request(`/expenses/${id}/${withActor(actorId)}`, { method: 'DELETE' }),
 
   // Settlements
   createSettlement: (settlementData) => request('/settlements/', { method: 'POST', body: settlementData }),
+  deleteSettlement: (id, actorId) => request(`/settlements/${id}/${withActor(actorId)}`, { method: 'DELETE' }),
+
+  // Push notifications
+  getPushPublicKey: () => request('/push/public_key/'),
+  pushSubscribe: (userId, subscription) => request('/push/subscribe/', {
+    method: 'POST',
+    body: { user_id: userId, subscription }
+  }),
+  pushUnsubscribe: (endpoint) => request('/push/unsubscribe/', { method: 'POST', body: { endpoint } }),
+  pushTest: (userId) => request('/push/test/', { method: 'POST', body: { user_id: userId } }),
 };
+
+function withActor(actorId) {
+  return actorId ? `?actor_id=${encodeURIComponent(actorId)}` : '';
+}
