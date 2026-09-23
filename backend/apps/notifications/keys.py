@@ -12,8 +12,11 @@ from cryptography.hazmat.primitives import serialization
 from django.conf import settings
 from py_vapid import Vapid, b64urlencode
 
-# RFC 8292 wants a contact URI; an https URL is valid when no email is configured.
-DEFAULT_SUBJECT = "https://github.com/Venkatesh2304/splitwise"
+# The contact a push service would use if our pushes caused it trouble. RFC 8292 also
+# allows an https URL, but py_vapid refuses to sign anything that isn't a mailto:, so
+# this must stay one. It's a placeholder until `ensure_vapid_keys --subject` sets a real
+# address; pushes work either way.
+DEFAULT_SUBJECT = "mailto:splitwise@example.com"
 
 class VapidKeys(NamedTuple):
     vapid: Vapid

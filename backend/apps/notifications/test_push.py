@@ -1,6 +1,10 @@
 import json
 import tempfile
+from io import StringIO
+from pathlib import Path
 from unittest import mock
+
+from django.core.management import call_command
 
 from django.test import override_settings
 from rest_framework.test import APITestCase
@@ -290,6 +294,24 @@ class DeliveryTests(APITestCase):
         first = keys.load().public_key
         self.assertFalse(keys.ensure("mailto:v@example.com"))
         self.assertEqual(keys.load().public_key, first)
+        self.assertEqual(keys.load().subject, "mailto:v@example.com")
+
+    def test_the_configured_contact_can_actually_sign_a_push(self):
+        """The mocked sends below would pass with a contact py_vapid refuses to sign
+        with, which silently breaks every real push."""
+        keys.ensure()
+        loaded = keys.load()
+        for subject in (loaded.subject, "mailto:someone@example.com"):
+            headers = loaded.vapid.sign({"sub": subject, "aud": "https://fcm.googleapis.com"})
+            self.assertTrue(headers["Authorization"].startswith("vapid t="))
+
+    def test_command_refuses_a_contact_that_cannot_sign(self):
+        out, err = StringIO(), StringIO()
+        call_command("ensure_vapid_keys", subject="https://example.com/me", stdout=out, stderr=err)
+        self.assertIn("must be a mailto:", err.getvalue())
+        self.assertFalse((Path(self.tmp.name) / "subject.txt").exists())
+
+        call_command("ensure_vapid_keys", subject="mailto:v@example.com", stdout=out, stderr=err)
         self.assertEqual(keys.load().subject, "mailto:v@example.com")
 
     def test_subscribing_same_device_as_another_user_moves_it(self):

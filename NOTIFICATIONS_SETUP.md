@@ -111,8 +111,10 @@ Then deploy as usual:
 ```
 
 `sync.sh` installs `pywebpush`, runs the migration and creates the notification signing
-key. Give the key a contact address once (any push service that has a problem with your
-pushes would use it to reach you):
+key. The key is created with a placeholder contact address. Replace it with a real one — a
+push service having trouble with your pushes would use it to reach you. It has to be a
+`mailto:` address; anything else is refused, because the signing library won't sign with
+it:
 
 ```bash
 cd /home/ubuntu/splitwise/backend

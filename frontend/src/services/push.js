@@ -52,7 +52,18 @@ function sameKey(subscription, publicKey) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
+// Two quick taps (the bell and the dashboard card) would otherwise race and leave the
+// device registered twice, so everyone shares one in-flight attempt
+let subscribing = null;
+
 async function subscribeWithServerKey(reg) {
+  if (!subscribing) {
+    subscribing = doSubscribe(reg).finally(() => { subscribing = null; });
+  }
+  return subscribing;
+}
+
+async function doSubscribe(reg) {
   const { public_key: publicKey } = await api.getPushPublicKey();
   let sub = await reg.pushManager.getSubscription();
   if (sub && !sameKey(sub, publicKey)) {
