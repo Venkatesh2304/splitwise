@@ -2,7 +2,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from . import keys, push
+from . import events, keys, push
 from .events import resolve_actor
 from .models import PushSubscription
 
@@ -42,6 +42,35 @@ def push_unsubscribe(request):
     endpoint = str(request.data.get("endpoint") or "")
     deleted, _ = PushSubscription.objects.filter(endpoint=endpoint).delete()
     return Response({"ok": True, "removed": deleted})
+
+@api_view(['POST'])
+def nudge(request):
+    """Ask someone to settle up: a notification to them, recorded in the group's activity
+    so it isn't an anonymous poke, and limited so it can't become nagging."""
+    from apps.groups.models import Group
+
+    actor = resolve_actor(request.data.get('actor_id'))
+    debtor = resolve_actor(request.data.get('user_id'))
+    group = Group.objects.filter(id=request.data.get('group_id') or 0).first()
+    if not actor or not debtor or not group:
+        return Response({"error": "actor_id, user_id and group_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+    if actor.id == debtor.id:
+        return Response({"error": "You can't nudge yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
+    waited = events.nudge_cooldown_remaining(group, actor, debtor)
+    if waited:
+        return Response(
+            {"error": f"Already nudged {events.first_name(debtor)} recently. Try again in about {waited}."},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    try:
+        amount = float(request.data.get('amount') or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+
+    events.nudged(group, actor, debtor, amount)
+    return Response({"ok": True})
 
 @api_view(['POST'])
 def push_test(request):

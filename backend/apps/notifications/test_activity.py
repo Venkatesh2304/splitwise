@@ -1,3 +1,4 @@
+from datetime import timedelta
 from unittest import mock
 
 from django.utils import timezone
@@ -218,3 +219,41 @@ class ActivityApiTests(ActivityTestBase):
         self.add_expense(description="New")
         titles = [e.title for e in activity.for_user(self.group.id, self.akash.id, since=cutoff)]
         self.assertEqual(titles, ["Rahul added “New”"])
+
+
+class NudgeTests(ActivityTestBase):
+    def nudge(self, actor, debtor, amount=340):
+        return self.client.post("/api/nudge/", {
+            "actor_id": actor.id, "user_id": debtor.id, "group_id": self.group.id, "amount": amount,
+        }, format="json")
+
+    def test_a_nudge_notifies_the_debtor_and_is_recorded(self):
+        res = self.nudge(self.akash, self.rahul)
+        self.assertEqual(res.status_code, 200)
+
+        self.assertEqual([uid for uid, _ in self.sent], [self.rahul.id])
+        payload = self.sent[0][1]
+        self.assertEqual(payload["title"], "👋 Akash is asking you to settle up")
+        self.assertEqual(payload["body"], "you owe ₹340 · Groceries 🛒")
+
+        event = ActivityEvent.objects.get(kind=ActivityEvent.NUDGED)
+        self.assertEqual(event.title, "Akash nudged Rahul")
+        self.assertTrue(event.concerns(self.rahul.id))
+        self.assertFalse(event.concerns(self.akash.id))
+
+    def test_a_second_nudge_within_six_hours_is_refused(self):
+        self.assertEqual(self.nudge(self.akash, self.rahul).status_code, 200)
+        again = self.nudge(self.akash, self.rahul)
+        self.assertEqual(again.status_code, 429)
+        self.assertIn("Try again in about", again.data["error"])
+        self.assertEqual(ActivityEvent.objects.filter(kind=ActivityEvent.NUDGED).count(), 1)
+
+        # Someone else may still nudge, and the same person may nudge once the wait is over
+        self.assertEqual(self.nudge(self.anish, self.rahul).status_code, 200)
+        stale = ActivityEvent.objects.filter(kind=ActivityEvent.NUDGED, actor=self.akash).first()
+        ActivityEvent.objects.filter(id=stale.id).update(created_at=timezone.now() - timedelta(hours=7))
+        self.assertEqual(self.nudge(self.akash, self.rahul).status_code, 200)
+
+    def test_nudges_need_both_people_and_a_group(self):
+        self.assertEqual(self.client.post("/api/nudge/", {"actor_id": self.akash.id}, format="json").status_code, 400)
+        self.assertEqual(self.nudge(self.akash, self.akash).status_code, 400)

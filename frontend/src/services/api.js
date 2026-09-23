@@ -56,6 +56,9 @@ export const api = {
   // Users
   getUsers: () => request('/users/'),
   createUser: (userData) => request('/users/', { method: 'POST', body: userData }),
+  updateUser: (id, userData) => request(`/users/${id}/`, { method: 'PATCH', body: userData }),
+  // Fetched only when a payment is about to be made, not with every user list
+  getUpiId: (id) => request(`/users/${id}/upi/`),
 
   // Groups (userId brings back what that person hasn't seen yet)
   getGroups: (userId) => request(`/groups/${forUser(userId)}`),
@@ -87,6 +90,12 @@ export const api = {
   }),
   pushUnsubscribe: (endpoint) => request('/push/unsubscribe/', { method: 'POST', body: { endpoint } }),
   pushTest: (userId) => request('/push/test/', { method: 'POST', body: { user_id: userId } }),
+
+  // Ask someone to settle up (they get a notification)
+  nudge: ({ actorId, userId, groupId, amount }) => request('/nudge/', {
+    method: 'POST',
+    body: { actor_id: actorId, user_id: userId, group_id: groupId, amount }
+  }),
 };
 
 function withActor(actorId) {

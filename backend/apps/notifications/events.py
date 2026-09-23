@@ -9,7 +9,10 @@ payer/share rows the message needs.
 """
 import json
 import re
+from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
+
+from django.utils import timezone
 
 from apps.users.models import UserProfile
 
@@ -233,6 +236,35 @@ def expense_deleted(before, actor, tag=None):
         }))
     return _emit(ActivityEvent.EXPENSE_DELETED, before["group_id"], actor, title,
                  _expense_url(before), messages)
+
+NUDGE_COOLDOWN = timedelta(hours=6)
+
+def nudge_cooldown_remaining(group, actor, debtor):
+    """How long before this person may be nudged again, or None if they can be now."""
+    last = ActivityEvent.objects.filter(
+        group=group, actor=actor, kind=ActivityEvent.NUDGED, lines__has_key=str(debtor.id)
+    ).first()
+    if last is None:
+        return None
+    left = (last.created_at + NUDGE_COOLDOWN) - timezone.now()
+    if left <= timedelta(0):
+        return None
+    hours, minutes = divmod(int(left.total_seconds()) // 60, 60)
+    return f"{hours}h {minutes}m" if hours else f"{minutes}m"
+
+def nudged(group, actor, debtor, amount):
+    currency = group.currency or "₹"
+    title = f"👋 {first_name(actor)} is asking you to settle up"
+    body = _join(
+        f"you owe {money(amount, currency)}" if amount > EPSILON else None,
+        group.name,
+    )
+    messages = [(debtor.id, {
+        "title": title, "body": body, "tag": f"nudge-{group.id}-{actor.id}",
+        "url": f"/?group={group.id}", "group_id": group.id,
+    })]
+    return _emit(ActivityEvent.NUDGED, group.id, actor, f"{first_name(actor)} nudged {first_name(debtor)}",
+                 f"/?group={group.id}", messages)
 
 def _settlement_party(snap, uid, subject, as_subject):
     if subject == uid:

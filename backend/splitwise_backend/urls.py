@@ -46,6 +46,7 @@ urlpatterns = [
     path('api/push/subscribe/', push_views.push_subscribe, name='push_subscribe'),
     path('api/push/unsubscribe/', push_views.push_unsubscribe, name='push_unsubscribe'),
     path('api/push/test/', push_views.push_test, name='push_test'),
+    path('api/nudge/', push_views.nudge, name='nudge'),
 
     # API router
     path('api/', include((router.urls, 'api'))),

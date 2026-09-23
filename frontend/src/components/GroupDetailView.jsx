@@ -5,6 +5,20 @@ import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight, Sparkles }
 
 const isAfter = (iso, baseline) => Boolean(iso && baseline) && new Date(iso) > new Date(baseline);
 
+// A UPI app can only be opened from a phone; elsewhere we show the id to copy instead
+const canOpenUpiApp = () => /Android|iPhone|iPad/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+
+function upiPayLink({ upiId, name, amount, note }) {
+  const params = new URLSearchParams({
+    pa: upiId,
+    pn: name || '',
+    am: Number(amount).toFixed(2),
+    cu: 'INR',
+    tn: note || 'Splitwise settle-up',
+  });
+  return `upi://pay?${params.toString()}`;
+}
+
 const userIdOf = (row) => (row && row.user && row.user.id) ?? (row ? row.user_id : null);
 const firstName = (user) => (user && user.name ? user.name.split(' ')[0] : 'Someone');
 
@@ -111,6 +125,8 @@ export default function GroupDetailView({
   const [modalTab, setModalTab] = useState('overall'); // 'overall' | 'items'
   const [selectedSettlement, setSelectedSettlement] = useState(null);
   const [stripDismissed, setStripDismissed] = useState(false);
+  const [payInfo, setPayInfo] = useState(null);       // shown on desktop, where upi:// does nothing
+  const [nudgeState, setNudgeState] = useState({});   // "debtor-creditor" -> message
 
   const actorId = (currentUser || activeUser)?.id;
 
@@ -163,6 +179,39 @@ export default function GroupDetailView({
       fetchDetail();
     } catch (err) {
       alert('Failed to delete expense.');
+    }
+  };
+
+  // Open the payee's UPI app with the amount filled in, and leave the settle form ready
+  // for when they come back — nothing tells us whether the payment actually happened.
+  const handlePay = async (payee, amount) => {
+    try {
+      const { upi_id: upiId, name } = await api.getUpiId(payee.id);
+      if (!upiId) {
+        setPayInfo({ name: payee.name, text: `${payee.name.split(' ')[0]} hasn't added a UPI ID yet.` });
+        return;
+      }
+      const link = upiPayLink({ upiId, name, amount, note: `${groupData.name} settle-up` });
+      if (canOpenUpiApp()) {
+        onOpenSettleUp(groupData, actorId, payee.id, Number(amount).toFixed(2));
+        window.location.href = link;
+      } else {
+        setPayInfo({ name: payee.name, text: `Pay ${payee.name.split(' ')[0]} at ${upiId} — UPI apps only open on a phone.` });
+      }
+    } catch (err) {
+      setPayInfo({ name: payee.name, text: 'Could not fetch their UPI ID.' });
+    }
+  };
+
+  // Keyed per row: the same person can owe several people, and the reply belongs to the
+  // row that was tapped
+  const handleNudge = async (debtor, amount, rowKey) => {
+    setNudgeState(current => ({ ...current, [rowKey]: 'Sending…' }));
+    try {
+      await api.nudge({ actorId, userId: debtor.id, groupId: groupData.id, amount });
+      setNudgeState(current => ({ ...current, [rowKey]: `Asked ${debtor.name.split(' ')[0]} to settle up.` }));
+    } catch (err) {
+      setNudgeState(current => ({ ...current, [rowKey]: err.message.replace(/^\{"error":"|"\}$/g, '') }));
     }
   };
 
@@ -634,6 +683,19 @@ export default function GroupDetailView({
             <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block', marginBottom: '0.75rem' }}>
               Suggested Settle-Up Payments
             </span>
+            {payInfo && (
+              <div style={{
+                marginBottom: '0.75rem', padding: '0.55rem 0.75rem', fontSize: '0.8rem',
+                backgroundColor: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)',
+                display: 'flex', justifyContent: 'space-between', gap: '0.5rem'
+              }}>
+                <span>{payInfo.text}</span>
+                <button onClick={() => setPayInfo(null)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             {filteredDebts.length === 0 ? (
               <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', textAlign: 'center', padding: '1rem 0' }}>
                 Everyone in this group is completely settled up!
@@ -651,10 +713,11 @@ export default function GroupDetailView({
 
                   const fromName = fromIsMe ? 'You' : fromUser.name.split(' ')[0];
                   const toName = toIsMe ? 'You' : toUser.name.split(' ')[0];
+                  const rowKey = `${d.from_user_id}-${d.to_user_id}`;
 
                   return (
+                    <React.Fragment key={idx}>
                     <div
-                      key={idx}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
@@ -669,10 +732,29 @@ export default function GroupDetailView({
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#ffffff', minWidth: 0 }}>
                         <strong>{fromName}</strong> {fromIsMe ? 'owe' : 'owes'} <strong>{toName}</strong>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexShrink: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
                         <span style={{ fontWeight: 800, color: 'var(--accent-primary)' }}>
                           {currency}{Math.round(d.amount)}
                         </span>
+                        {fromIsMe && toUser.has_upi && (
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => handlePay(toUser, d.amount)}
+                            style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+                          >
+                            Pay
+                          </button>
+                        )}
+                        {toIsMe && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleNudge(fromUser, d.amount, rowKey)}
+                            style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
+                            title={`Send ${fromUser.name.split(' ')[0]} a notification`}
+                          >
+                            Remind
+                          </button>
+                        )}
                         <button
                           className="btn btn-secondary btn-sm"
                           onClick={() => onOpenSettleUp(groupData, d.from_user_id, d.to_user_id, Number(d.amount).toFixed(2))}
@@ -682,6 +764,12 @@ export default function GroupDetailView({
                         </button>
                       </div>
                     </div>
+                    {nudgeState[rowKey] && (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', padding: '0 0.75rem' }}>
+                        {nudgeState[rowKey]}
+                      </div>
+                    )}
+                    </React.Fragment>
                   );
                 })}
 
