@@ -2,6 +2,38 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { useUser } from '../context/UserContext';
 import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight, Sparkles } from 'lucide-react';
+import GroupSummary from './GroupSummary';
+
+const CATEGORY_LABELS = {
+  FOOD: '🍔 Food & Dining',
+  UTILITIES: '💡 Utilities & Bills',
+  TRANSPORT: '🚗 Transport',
+  ENTERTAINMENT: '🎟️ Entertainment',
+  SHOPPING: '🛍️ Shopping',
+  OTHER: '📦 Other',
+};
+
+// Who an item concerns: for an expense whoever paid or owes, for a settle-up both sides
+function involvesUser(item, userId) {
+  if (item.kind === 'settlement') {
+    return (item.payer && item.payer.id === userId) || (item.payee && item.payee.id === userId);
+  }
+  const { involved } = myPosition(item, userId);
+  return involved;
+}
+
+function matchesSearch(item, query, members) {
+  if (!query) return true;
+  const haystack = [];
+  if (item.kind === 'settlement') {
+    haystack.push(item.payer?.name, item.payee?.name, item.notes, 'settle up payment');
+  } else {
+    haystack.push(item.description, CATEGORY_LABELS[item.category] || item.category);
+    payersOf(item).forEach(p => haystack.push((p.user || members.find(m => m.id === p.user_id))?.name));
+  }
+  haystack.push(String(Math.round(parseFloat(item.amount) || 0)), String(item.amount));
+  return haystack.filter(Boolean).join(' ').toLowerCase().includes(query.toLowerCase());
+}
 
 const isAfter = (iso, baseline) => Boolean(iso && baseline) && new Date(iso) > new Date(baseline);
 
@@ -118,7 +150,7 @@ export default function GroupDetailView({
   const [groupData, setGroupData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('expenses'); // 'expenses' | 'breakdown'
+  const [activeTab, setActiveTab] = useState('expenses'); // 'expenses' | 'breakdown' | 'summary'
 
   // Selected expense for detailed view modal
   const [selectedExpenseDetails, setSelectedExpenseDetails] = useState(null);
@@ -126,6 +158,9 @@ export default function GroupDetailView({
   const [selectedSettlement, setSelectedSettlement] = useState(null);
   const [stripDismissed, setStripDismissed] = useState(false);
   const [payInfo, setPayInfo] = useState(null);       // shown on desktop, where upi:// does nothing
+  const [search, setSearch] = useState('');
+  const [filterPerson, setFilterPerson] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
   const [nudgeState, setNudgeState] = useState({});   // "debtor-creditor" -> message
 
   const actorId = (currentUser || activeUser)?.id;
@@ -316,8 +351,17 @@ export default function GroupDetailView({
     return byDate !== 0 ? byDate : String(b.created_at || '').localeCompare(String(a.created_at || ''));
   });
 
+  const filtersOn = Boolean(search || filterPerson || filterCategory);
+  const visibleActivity = activity.filter(item => {
+    if (!matchesSearch(item, search, members)) return false;
+    if (filterPerson && !involvesUser(item, Number(filterPerson))) return false;
+    // Settle-ups have no category, so a category filter is asking for expenses only
+    if (filterCategory && item.category !== filterCategory) return false;
+    return true;
+  });
+
   const groupedActivity = {};
-  activity.forEach(item => {
+  visibleActivity.forEach(item => {
     const dateKey = formatDateGroupKey(item);
     if (!groupedActivity[dateKey]) groupedActivity[dateKey] = [];
     groupedActivity[dateKey].push(item);
@@ -445,9 +489,64 @@ export default function GroupDetailView({
           className={`tab-btn ${activeTab === 'breakdown' ? 'active' : ''}`}
           onClick={() => setActiveTab('breakdown')}
         >
-          Breakdown & Balances
+          Balances
+        </button>
+        <button
+          className={`tab-btn ${activeTab === 'summary' ? 'active' : ''}`}
+          onClick={() => setActiveTab('summary')}
+        >
+          Summary
         </button>
       </div>
+
+      {activeTab === 'expenses' && activity.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.85rem', alignItems: 'center' }}>
+          <input
+            className="form-input"
+            placeholder="Search expenses, people, amounts"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ flex: '1 1 180px', minWidth: 0, padding: '0.4rem 0.65rem', fontSize: '0.8rem' }}
+          />
+          <select
+            className="form-select"
+            value={filterPerson}
+            onChange={(e) => setFilterPerson(e.target.value)}
+            style={{ width: 'auto', flex: '0 1 auto', padding: '0.4rem 0.5rem', fontSize: '0.8rem' }}
+          >
+            <option value="">Anyone</option>
+            {members.map(m => (
+              <option key={m.id} value={m.id}>{m.id === myUserId ? 'Me' : m.name.split(' ')[0]}</option>
+            ))}
+          </select>
+          <select
+            className="form-select"
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            style={{ width: 'auto', flex: '0 1 auto', padding: '0.4rem 0.5rem', fontSize: '0.8rem' }}
+          >
+            <option value="">Any category</option>
+            {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+          {filtersOn && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => { setSearch(''); setFilterPerson(''); setFilterCategory(''); }}
+              style={{ padding: '0.35rem 0.6rem', fontSize: '0.75rem' }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'expenses' && filtersOn && (
+        <div style={{ fontSize: '0.775rem', color: 'var(--text-muted)', marginBottom: '0.6rem' }}>
+          Showing {visibleActivity.length} of {activity.length}
+        </div>
+      )}
 
       {activeTab === 'expenses' && missedEvents.length > 0 && !stripDismissed && (
         <div className="card" style={{ marginBottom: '1rem', padding: '0.85rem 1rem', borderLeft: '4px solid var(--accent-primary)' }}>
@@ -506,6 +605,11 @@ export default function GroupDetailView({
             <p style={{ fontSize: '0.85rem' }}>No expenses recorded yet.</p>
           </div>
         ) : (
+          visibleActivity.length === 0 ? (
+          <div className="card" style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)' }}>
+            <p style={{ fontSize: '0.85rem' }}>Nothing matches that.</p>
+          </div>
+          ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             {Object.entries(groupedActivity).map(([dateLabel, dateItems]) => (
               <div key={dateLabel}>
@@ -620,7 +724,10 @@ export default function GroupDetailView({
               </div>
             ))}
           </div>
+          )
         )
+      ) : activeTab === 'summary' ? (
+        <GroupSummary groupId={groupId} currentUserId={actorId} refreshToken={refreshToken} />
       ) : (
         /* TAB 2: BREAKDOWN SUMMARY (Members Net Balances & Simplified Debts) */
         <div>

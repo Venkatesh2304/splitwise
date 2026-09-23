@@ -1,3 +1,6 @@
+import re
+
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -92,6 +95,20 @@ class GroupViewSet(viewsets.ModelViewSet):
             data["unseen_count"] = activity.unseen_count(group.id, viewer.id)
 
         return Response(data)
+
+    @action(detail=True, methods=['get'])
+    def summary(self, request, pk=None):
+        """What the group spent in a month, and what of it was yours."""
+        from apps.expenses import summary as summary_builder
+
+        group = self.get_object()
+        months = summary_builder.months_with_expenses(group)
+        month = request.query_params.get('month') or (months[0] if months else timezone.now().strftime('%Y-%m'))
+        if not re.match(r'^\d{4}-\d{2}$', month):
+            return Response({'error': 'month must look like 2026-09'}, status=status.HTTP_400_BAD_REQUEST)
+
+        viewer = resolve_actor(request.query_params.get('user_id'))
+        return Response(summary_builder.build(group, month, viewer.id if viewer else None))
 
     @action(detail=True, methods=['post'])
     def seen(self, request, pk=None):

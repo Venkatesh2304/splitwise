@@ -257,3 +257,54 @@ class NudgeTests(ActivityTestBase):
     def test_nudges_need_both_people_and_a_group(self):
         self.assertEqual(self.client.post("/api/nudge/", {"actor_id": self.akash.id}, format="json").status_code, 400)
         self.assertEqual(self.nudge(self.akash, self.akash).status_code, 400)
+
+
+class SummaryTests(ActivityTestBase):
+    def test_a_months_figures_tie_out_to_the_group(self):
+        """The summary and the group screen must not be able to disagree about a total."""
+        self.add_expense(description="Dinner", amount=300)
+        self.add_expense(description="Cab", amount=600, payer=self.akash, members=[self.akash, self.rahul])
+        month = timezone.now().strftime('%Y-%m')
+
+        res = self.client.get(f"/api/groups/{self.group.id}/summary/?month={month}&user_id={self.akash.id}")
+        self.assertEqual(res.status_code, 200)
+        data = res.data
+
+        detail = self.client.get(f"/api/groups/{self.group.id}/?user_id={self.akash.id}").data
+        self.assertEqual(data["total"], detail["total_spending"])
+        self.assertEqual(data["expense_count"], 2)
+
+        # Akash paid the cab in full, and owes 100 of the dinner plus 300 of the cab
+        self.assertEqual(data["your_paid"], 600.0)
+        self.assertEqual(data["your_share"], 400.0)
+        # Everyone's shares add up to what was spent
+        self.assertAlmostEqual(sum(p["share"] for p in data["people"]), data["total"], places=2)
+        self.assertAlmostEqual(sum(p["paid"] for p in data["people"]), data["total"], places=2)
+        self.assertAlmostEqual(sum(c["total"] for c in data["categories"]), data["total"], places=2)
+        self.assertEqual([b["description"] for b in data["biggest"]], ["Cab", "Dinner"])
+        self.assertEqual(data["available_months"], [month])
+
+    def test_an_empty_month_is_not_an_error(self):
+        self.add_expense()
+        res = self.client.get(f"/api/groups/{self.group.id}/summary/?month=2020-01")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data["total"], 0)
+        self.assertEqual(res.data["people"], [])
+        self.assertEqual(res.data["previous_month"], "2019-12")
+
+    def test_change_against_the_previous_month(self):
+        from apps.expenses.models import Expense
+        self.add_expense(description="This month", amount=500)
+        old = self.add_expense(description="Last month", amount=200)
+        last_month = (timezone.now().date().replace(day=1) - timedelta(days=1))
+        Expense.objects.filter(id=old).update(date=last_month)
+
+        month = timezone.now().strftime('%Y-%m')
+        data = self.client.get(f"/api/groups/{self.group.id}/summary/?month={month}").data
+        self.assertEqual(data["total"], 500.0)
+        self.assertEqual(data["previous_total"], 200.0)
+        self.assertEqual(data["change"], 300.0)
+        self.assertEqual(data["available_months"], [month, last_month.strftime('%Y-%m')])
+
+    def test_a_bad_month_is_refused(self):
+        self.assertEqual(self.client.get(f"/api/groups/{self.group.id}/summary/?month=sept").status_code, 400)
