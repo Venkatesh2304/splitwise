@@ -57,9 +57,13 @@ export const api = {
   getUsers: () => request('/users/'),
   createUser: (userData) => request('/users/', { method: 'POST', body: userData }),
 
-  // Groups
-  getGroups: () => request('/groups/'),
-  getGroupDetail: (id) => request(`/groups/${id}/`),
+  // Groups (userId brings back what that person hasn't seen yet)
+  getGroups: (userId) => request(`/groups/${forUser(userId)}`),
+  getGroupDetail: (id, userId) => request(`/groups/${id}/${forUser(userId)}`),
+  markGroupSeen: (groupId, userId) => request(`/groups/${groupId}/seen/`, {
+    method: 'POST',
+    body: { user_id: userId }
+  }),
   createGroup: (groupData) => request('/groups/', { method: 'POST', body: groupData }),
   addGroupMember: (groupId, userId) => request(`/groups/${groupId}/add_member/`, {
     method: 'POST',
@@ -87,4 +91,8 @@ export const api = {
 
 function withActor(actorId) {
   return actorId ? `?actor_id=${encodeURIComponent(actorId)}` : '';
+}
+
+function forUser(userId) {
+  return userId ? `?user_id=${encodeURIComponent(userId)}` : '';
 }

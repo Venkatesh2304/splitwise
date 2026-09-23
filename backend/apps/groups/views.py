@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from .models import Group, GroupMember
 from .serializers import GroupSerializer
 from apps.users.models import UserProfile
+from apps.notifications import activity
+from apps.notifications.events import resolve_actor
 from domain.balance_engine import calculate_group_balances
 from domain.debt_simplifier import simplify_debts
 
@@ -35,7 +37,14 @@ class GroupViewSet(viewsets.ModelViewSet):
             for u in users:
                 GroupMember.objects.create(group=groceries_group, user=u)
 
-        return super().list(request, *args, **kwargs)
+        response = super().list(request, *args, **kwargs)
+
+        # ?user_id= asks "how much has this person not seen in each group?"
+        viewer = resolve_actor(request.query_params.get('user_id'))
+        if viewer:
+            for group in response.data:
+                group['unseen_count'] = activity.unseen_count(group['id'], viewer.id)
+        return response
 
     def retrieve(self, request, *args, **kwargs):
         group = self.get_object()
@@ -75,7 +84,27 @@ class GroupViewSet(viewsets.ModelViewSet):
         data["expenses"] = ExpenseSerializer(expenses, many=True).data
         data["settlements"] = SettlementSerializer(settlements, many=True).data
 
+        viewer = resolve_actor(request.query_params.get('user_id'))
+        if viewer:
+            baseline = activity.baseline_for(group.id, viewer.id)
+            data["last_seen_at"] = baseline
+            data["activity"] = activity.serialize(activity.for_user(group.id, viewer.id), viewer.id)
+            data["unseen_count"] = activity.unseen_count(group.id, viewer.id)
+
         return Response(data)
+
+    @action(detail=True, methods=['post'])
+    def seen(self, request, pk=None):
+        """Mark this group as looked at. Returns the previous mark so the page can keep
+        highlighting what was new for the rest of the visit."""
+        group = self.get_object()
+        viewer = resolve_actor(request.data.get('user_id'))
+        if not viewer:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        previous = activity.mark_seen(group.id, viewer.id)
+        if previous is None:
+            return Response({'error': 'That user is not in this group'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'previous_seen_at': previous, 'unseen_count': 0})
 
     @action(detail=True, methods=['post'])
     def add_member(self, request, pk=None):

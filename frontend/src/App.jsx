@@ -45,6 +45,10 @@ function AppContent() {
   const [focusExpenseId, setFocusExpenseId] = useState(initialLink.expenseId);
   const [refreshToken, setRefreshToken] = useState(0);
   const [pushState, setPushState] = useState('checking');
+  // When each group was last seen, captured the first time it's opened in this session.
+  // Marking the group seen on the server happens straight away, but the page keeps
+  // comparing against this, so highlights last the whole visit instead of blinking out.
+  const [seenBaselines, setSeenBaselines] = useState({});
 
   // Modal visibility states
   const [isAddGroupOpen, setIsAddGroupOpen] = useState(false);
@@ -73,9 +77,9 @@ function AppContent() {
     }
   };
 
-  const fetchGroups = async () => {
+  const fetchGroups = async (userId) => {
     try {
-      const data = await api.getGroups();
+      const data = await api.getGroups(userId ?? currentUser?.id);
       setGroups(data);
     } catch (err) {
       console.error('Failed to fetch groups:', err);
@@ -143,17 +147,30 @@ function AppContent() {
     return `Sent. It should appear in a few seconds${res.devices > 1 ? ` (on all ${res.devices} of your devices)` : ''}.`;
   };
 
+  // Called by the group screen once it knows when this person last looked
+  const handleGroupOpened = useCallback((groupId, lastSeenAt) => {
+    setSeenBaselines((current) => {
+      if (groupId in current) return current;           // already fixed for this visit
+      api.markGroupSeen(groupId, currentUser?.id)
+        .then(() => fetchGroups())                      // clears the badge on the dashboard
+        .catch((err) => console.error('Could not mark the group as seen:', err));
+      return { ...current, [groupId]: lastSeenAt || null };
+    });
+  }, [currentUser?.id]);
+
   const handleLoginSuccess = (userObj) => {
     setCurrentUser(userObj);
     if (setActiveUser) setActiveUser(userObj);
     localStorage.setItem('splitwise_user', JSON.stringify(userObj));
-    fetchGroups();
+    setSeenBaselines({});
+    fetchGroups(userObj.id);
   };
 
   const handleLogout = () => {
     // A shared phone shouldn't keep receiving the previous user's notifications
     disablePush();
     setPushState('off');
+    setSeenBaselines({});
     setCurrentUser(null);
     if (setActiveUser) setActiveUser(null);
     localStorage.removeItem('splitwise_user');
@@ -258,6 +275,8 @@ function AppContent() {
               onOpenAddMember={(g) => handleOpenAddMemberToGroup(g)}
               onOpenBlinkit={() => setActiveTab('blinkit')}
               onEditExpense={(exp, g) => handleOpenEditExpense(exp, g)}
+              seenBaseline={seenBaselines[activeGroupId]}
+              onGroupOpened={handleGroupOpened}
               refreshToken={refreshToken}
               focusExpenseId={focusExpenseId}
               onFocusHandled={() => setFocusExpenseId(null)}

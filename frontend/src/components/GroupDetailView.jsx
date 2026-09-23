@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { useUser } from '../context/UserContext';
-import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight, Sparkles } from 'lucide-react';
+
+const isAfter = (iso, baseline) => Boolean(iso && baseline) && new Date(iso) > new Date(baseline);
 
 const userIdOf = (row) => (row && row.user && row.user.id) ?? (row ? row.user_id : null);
 const firstName = (user) => (user && user.name ? user.name.split(' ')[0] : 'Someone');
@@ -55,6 +57,26 @@ function myPosition(exp, myUserId) {
   return { paid, owed, net: paid - owed, involved: paid > 0.005 || owed > 0.005 };
 }
 
+function NewBadge({ label = 'New' }) {
+  return (
+    <span style={{
+      marginLeft: '0.4rem',
+      fontSize: '0.625rem',
+      fontWeight: 800,
+      textTransform: 'uppercase',
+      letterSpacing: '0.03em',
+      color: 'var(--accent-primary)',
+      backgroundColor: 'var(--bg-positive-light)',
+      border: '1px solid rgba(16, 185, 129, 0.35)',
+      borderRadius: '999px',
+      padding: '0.05rem 0.35rem',
+      verticalAlign: 'middle'
+    }}>
+      {label}
+    </span>
+  );
+}
+
 function addedLine(item, myUserId) {
   const who = (u) => (u && u.id === myUserId ? 'you' : firstName(u));
   const parts = [];
@@ -72,6 +94,8 @@ export default function GroupDetailView({
   onOpenBlinkit,
   onEditExpense,
   currentUser,
+  seenBaseline,
+  onGroupOpened,
   refreshToken = 0,
   focusExpenseId = null,
   onFocusHandled
@@ -86,6 +110,7 @@ export default function GroupDetailView({
   const [selectedExpenseDetails, setSelectedExpenseDetails] = useState(null);
   const [modalTab, setModalTab] = useState('overall'); // 'overall' | 'items'
   const [selectedSettlement, setSelectedSettlement] = useState(null);
+  const [stripDismissed, setStripDismissed] = useState(false);
 
   const actorId = (currentUser || activeUser)?.id;
 
@@ -93,8 +118,10 @@ export default function GroupDetailView({
   const fetchDetail = async () => {
     try {
       setError(null);
-      const data = await api.getGroupDetail(groupId);
+      const data = await api.getGroupDetail(groupId, actorId);
       setGroupData(data);
+      // Hand the baseline up on the first load; App keeps it fixed for this visit
+      if (onGroupOpened) onGroupOpened(groupId, data.last_seen_at);
     } catch (err) {
       console.error(err);
       setError('Failed to load group details.');
@@ -247,6 +274,12 @@ export default function GroupDetailView({
     groupedActivity[dateKey].push(item);
   });
 
+  // Everything recorded since this person last opened the group. Deletions only exist
+  // here — their row is gone — so the strip is the only place they can be shown.
+  const missedEvents = (groupData.activity || []).filter(e => isAfter(e.created_at, seenBaseline));
+  const isNew = (item) => isAfter(item.created_at, seenBaseline);
+  const isUpdated = (item) => !isNew(item) && isAfter(item.updated_at, seenBaseline);
+
   const memberName = (user, id) => {
     const uid = user ? user.id : id;
     if (uid === myUserId) return 'You';
@@ -367,6 +400,56 @@ export default function GroupDetailView({
         </button>
       </div>
 
+      {activeTab === 'expenses' && missedEvents.length > 0 && !stripDismissed && (
+        <div className="card" style={{ marginBottom: '1rem', padding: '0.85rem 1rem', borderLeft: '4px solid var(--accent-primary)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.6rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
+              <Sparkles size={16} color="var(--accent-primary)" style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#ffffff' }}>
+                {missedEvents.length} {missedEvents.length === 1 ? 'change' : 'changes'} since you were last here
+              </span>
+            </div>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => setStripDismissed(true)}
+              style={{ padding: '0.2rem 0.55rem', fontSize: '0.7rem', flexShrink: 0 }}
+            >
+              Mark as seen
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+            {missedEvents.map(event => {
+              const gone = event.kind === 'expense_deleted' || event.kind === 'settlement_deleted';
+              return (
+                <div
+                  key={event.id}
+                  onClick={() => {
+                    const target = expenses.find(e => e.id === event.expense_id);
+                    if (target) handleOpenExpenseModal(target);
+                  }}
+                  style={{
+                    padding: '0.5rem 0.65rem',
+                    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-sm)',
+                    cursor: event.expense_id && !gone ? 'pointer' : 'default',
+                    opacity: gone ? 0.75 : 1
+                  }}
+                >
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#ffffff', textDecoration: gone ? 'line-through' : 'none' }}>
+                    {event.title}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
+                    {[event.line, relativeTime(event.created_at)].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {activeTab === 'expenses' ? (
         /* TAB 1: ACTIVITY — expenses and settle-ups grouped by date ("28 Aug") */
         activity.length === 0 ? (
@@ -403,11 +486,16 @@ export default function GroupDetailView({
                           key={`settlement-${item.id}`}
                           className="card"
                           onClick={() => setSelectedSettlement(item)}
-                          style={{ padding: '0.85rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', cursor: 'pointer' }}
+                          style={{
+                            padding: '0.85rem 1rem', display: 'flex', alignItems: 'center',
+                            justifyContent: 'space-between', gap: '0.75rem', cursor: 'pointer',
+                            borderLeft: isNew(item) ? '3px solid var(--accent-primary)' : undefined
+                          }}
                         >
                           <div style={{ minWidth: 0, flex: 1 }}>
                             <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               💸 {memberName(item.payer)} paid {memberName(item.payee)}
+                              {isNew(item) && <NewBadge />}
                             </div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {meta || 'Settle-up payment'}
@@ -443,11 +531,17 @@ export default function GroupDetailView({
                         key={`expense-${exp.id}`}
                         className="card"
                         onClick={() => handleOpenExpenseModal(exp)}
-                        style={{ padding: '0.85rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', cursor: 'pointer' }}
+                        style={{
+                          padding: '0.85rem 1rem', display: 'flex', alignItems: 'center',
+                          justifyContent: 'space-between', gap: '0.75rem', cursor: 'pointer',
+                          borderLeft: (isNew(exp) || isUpdated(exp)) ? '3px solid var(--accent-primary)' : undefined
+                        }}
                       >
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {getCleanTitle(exp.description)}
+                            {isNew(exp) && <NewBadge />}
+                            {isUpdated(exp) && <NewBadge label="Updated" />}
                           </div>
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
                             <strong style={{ color: '#ffffff' }}>{payerSummary(exp, myUserId, members)}</strong> paid {currency}{shortAmount(totalAmt)}

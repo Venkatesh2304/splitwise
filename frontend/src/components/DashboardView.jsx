@@ -60,6 +60,27 @@ function NotificationNudge({ pushState, onEnablePush }) {
   );
 }
 
+export function UnseenBadge({ count }) {
+  return (
+    <span
+      title={`${count} ${count === 1 ? 'change' : 'changes'} you haven't seen`}
+      style={{
+        fontSize: '0.65rem',
+        fontWeight: 800,
+        color: '#0f172a',
+        backgroundColor: 'var(--accent-primary)',
+        borderRadius: '999px',
+        padding: '0.05rem 0.4rem',
+        minWidth: '1.15rem',
+        textAlign: 'center',
+        flexShrink: 0
+      }}
+    >
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
+
 export default function DashboardView({ groups, onSelectGroup, onOpenAddGroup, onOpenAddExpense, pushState, onEnablePush }) {
   const { activeUser } = useUser();
   const [groupDetailsMap, setGroupDetailsMap] = useState({});
@@ -203,8 +224,9 @@ export default function DashboardView({ groups, onSelectGroup, onOpenAddGroup, o
                 >
                   <div>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                      <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#ffffff' }}>
+                      <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                         {group.name}
+                        {group.unseen_count > 0 && <UnseenBadge count={group.unseen_count} />}
                       </h4>
                       <span className="balance-tag neutral" style={{ fontSize: '0.725rem' }}>
                         {group.category}

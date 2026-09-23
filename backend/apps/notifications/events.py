@@ -14,6 +14,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from apps.users.models import UserProfile
 
 from . import push
+from .models import ActivityEvent
 
 EPSILON = 0.005
 DEFAULT_SETTLEMENT_NOTE = "Payment settlement via Splitwise"
@@ -159,7 +160,19 @@ def _is_generated_title(snapshot):
     platform = snapshot.get("platform") or ""
     return bool(platform) and bool(re.match(rf"^{re.escape(platform)} order #", snapshot["description"], re.I))
 
-def _send(messages):
+def _emit(kind, group_id, actor, title, url, messages, expense_id=None):
+    """Record the change, then notify. Both read from the same per-person lines, so the
+    app and the notification can never word the same change differently."""
+    if messages:
+        ActivityEvent.objects.create(
+            group_id=group_id,
+            actor=actor,
+            kind=kind,
+            expense_id=expense_id,
+            title=title,
+            url=url,
+            lines={str(uid): payload["body"] for uid, payload in messages},
+        )
     push.queue(messages)
     return messages
 
@@ -181,7 +194,8 @@ def expense_added(expense, actor, tag=None):
             "title": title, "body": body, "tag": _tag(snap, tag),
             "url": _expense_url(snap, snap["id"]), "group_id": snap["group_id"],
         }))
-    return _send(messages)
+    return _emit(ActivityEvent.EXPENSE_ADDED, snap["group_id"], actor, title,
+                 _expense_url(snap, snap["id"]), messages, expense_id=snap["id"])
 
 def expense_edited(before, expense, actor, tag=None):
     after = snapshot_expense(expense)
@@ -205,7 +219,8 @@ def expense_edited(before, expense, actor, tag=None):
             "title": title, "body": _join(share, total), "tag": _tag(after, tag),
             "url": _expense_url(after, after["id"]), "group_id": after["group_id"],
         }))
-    return _send(messages)
+    return _emit(ActivityEvent.EXPENSE_EDITED, after["group_id"], actor, title,
+                 _expense_url(after, after["id"]), messages, expense_id=after["id"])
 
 def expense_deleted(before, actor, tag=None):
     title = f"{first_name(actor)} deleted {_quote(before['description'])}"
@@ -216,7 +231,8 @@ def expense_deleted(before, actor, tag=None):
             "title": title, "body": body, "tag": _tag(before, tag),
             "url": _expense_url(before), "group_id": before["group_id"],
         }))
-    return _send(messages)
+    return _emit(ActivityEvent.EXPENSE_DELETED, before["group_id"], actor, title,
+                 _expense_url(before), messages)
 
 def _settlement_party(snap, uid, subject, as_subject):
     if subject == uid:
@@ -238,7 +254,11 @@ def settlement_recorded(settlement, actor):
             "title": f"💸 {payer} paid {payee} {amount}", "body": body,
             "tag": f"settlement-{snap['id']}", "url": f"/?group={snap['group_id']}", "group_id": snap["group_id"],
         }))
-    return _send(messages)
+    # The title is written from each reader's side ("You paid…"), so the stored one names
+    # both people instead
+    shared_title = f"💸 {snap['names'].get(snap['payer_id'], 'Someone')} paid {snap['names'].get(snap['payee_id'], 'someone')} {amount}"
+    return _emit(ActivityEvent.SETTLEMENT_RECORDED, snap["group_id"], actor, shared_title,
+                 f"/?group={snap['group_id']}", messages)
 
 def settlement_deleted(snap, actor):
     amount = money(snap["amount"], snap["currency"])
@@ -251,4 +271,5 @@ def settlement_deleted(snap, actor):
             "body": _join(f"{payer} paid {payee} {amount}", snap["group_name"]),
             "tag": f"settlement-{snap['id']}", "url": f"/?group={snap['group_id']}", "group_id": snap["group_id"],
         }))
-    return _send(messages)
+    return _emit(ActivityEvent.SETTLEMENT_DELETED, snap["group_id"], actor,
+                 f"{first_name(actor)} deleted a settle-up", f"/?group={snap['group_id']}", messages)
