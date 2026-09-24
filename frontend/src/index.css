@@ -249,6 +249,7 @@ html, body {
 /* Tab Switcher */
 .tab-group {
   display: flex;
+  flex-wrap: wrap; /* four tabs don't fit a phone on one line */
   background-color: rgba(15, 23, 42, 0.6);
   padding: 0.2rem;
   border-radius: var(--radius-md);
@@ -258,7 +259,7 @@ html, body {
 }
 
 .tab-btn {
-  flex: 1;
+  flex: 1 1 auto;
   padding: 0.45rem 0.35rem;
   text-align: center;
   font-size: 0.8rem;

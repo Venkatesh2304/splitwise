@@ -922,7 +922,7 @@ export default function GroupDetailView({
                   className={`tab-btn ${modalTab === 'items' ? 'active' : ''}`}
                   onClick={() => setModalTab('items')}
                 >
-                  Order Products & Items
+                  Items
                 </button>
               </div>
             </div>

@@ -2,8 +2,27 @@ import React, { useState, useEffect } from 'react';
 import { useUser } from '../context/UserContext';
 import { api } from '../services/api';
 import { X, Receipt, Calculator, Check, AlertCircle } from 'lucide-react';
+import ItemsEditor, { blankItem } from './ItemsEditor';
 
-const EDITABLE_SPLIT_TYPES = ['EQUAL', 'EXACT', 'PERCENTAGE'];
+const EDITABLE_SPLIT_TYPES = ['EQUAL', 'EXACT', 'PERCENTAGE', 'ITEMS'];
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+// The items stored on an expense, if it was split that way (and isn't a grocery order,
+// which is re-split from its own screen)
+function storedItems(expense) {
+  try {
+    const notes = JSON.parse(expense.notes || '');
+    if (!notes || notes.platform || !Array.isArray(notes.items)) return null;
+    return notes.items.map((item, index) => ({
+      key: `stored-${index}`,
+      name: item.name || '',
+      price: String(item.price ?? ''),
+      assigned: item.assigned_member_ids || [],
+    }));
+  } catch {
+    return null;
+  }
+}
 const userIdOf = (row) => (row.user && row.user.id) ?? row.user_id;
 
 // editingExpense: an existing manual expense to edit (null = add a new one)
@@ -21,6 +40,8 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
   // Custom split values: { [userId]: amountOrPercentage }
   const [customValues, setCustomValues] = useState({});
   const [selectedSplitMemberIds, setSelectedSplitMemberIds] = useState([]);
+  const [items, setItems] = useState([]);
+  const [charges, setCharges] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -71,6 +92,8 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setCategory('FOOD');
       setDate(new Date().toISOString().split('T')[0]);
       setSplitType('EQUAL');
+      setItems([]);
+      setCharges('');
       return;
     }
 
@@ -87,6 +110,12 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
     setSplitType(type);
     setSelectedSplitMemberIds(memberIds);
 
+    const saved = type === 'ITEMS' ? storedItems(editingExpense) : null;
+    setItems(saved || []);
+    setCharges(saved
+      ? String(round2(parseFloat(editingExpense.amount) - saved.reduce((sum, i) => sum + (parseFloat(i.price) || 0), 0)) || '')
+      : '');
+
     const custom = {};
     shares.forEach(sh => {
       const uid = userIdOf(sh);
@@ -99,11 +128,20 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
 
   if (!isOpen) return null;
 
-  const totalAmountNum = parseFloat(amount) || 0;
+  const isItems = splitType === 'ITEMS';
+  const itemsTotal = items.reduce((sum, item) => sum + (parseFloat(item.price) || 0), 0);
+  const totalAmountNum = isItems ? round2(itemsTotal + (parseFloat(charges) || 0)) : (parseFloat(amount) || 0);
+  const unassignedItems = items.filter(item => item.assigned.length === 0).length;
 
   // Custom split validation status
   let splitValidationMsg = null;
-  if (splitType === 'EXACT') {
+  if (isItems) {
+    if (items.length === 0) {
+      splitValidationMsg = 'Add at least one item.';
+    } else if (unassignedItems > 0) {
+      splitValidationMsg = `${unassignedItems} item${unassignedItems > 1 ? 's have' : ' has'} nobody on it — tap the people who had it.`;
+    }
+  } else if (splitType === 'EXACT') {
     const exactSum = selectedSplitMemberIds.reduce((sum, id) => sum + (parseFloat(customValues[id]) || 0), 0);
     const diff = Math.abs(exactSum - totalAmountNum);
     if (diff > 0.01 && totalAmountNum > 0) {
@@ -139,8 +177,9 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setError('Description is required.');
       return;
     }
-    if (!amount || totalAmountNum <= 0) {
-      setError('Expense amount must be greater than 0.');
+    // In items mode the amount isn't typed, it adds up from the items and charges
+    if (totalAmountNum <= 0) {
+      setError(isItems ? 'Add at least one item with a price.' : 'Expense amount must be greater than 0.');
       return;
     }
     if (!currentGroup) {
@@ -182,9 +221,16 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
         split_type: splitType,
         date,
         payers,
-        shares,
+        shares: isItems ? [] : shares,
         actor_id: activeUser ? activeUser.id : undefined
       };
+      if (isItems) {
+        expenseData.items = items.map(item => ({
+          name: item.name.trim() || 'Item',
+          price: parseFloat(item.price) || 0,
+          assigned_member_ids: item.assigned,
+        }));
+      }
 
       if (editingExpense) {
         await api.updateExpense(editingExpense.id, expenseData);
@@ -272,8 +318,11 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                   min="0.01"
                   className="form-input"
                   placeholder="0.00"
-                  value={amount}
+                  value={isItems ? (totalAmountNum || '') : amount}
                   onChange={(e) => setAmount(e.target.value)}
+                  readOnly={isItems}
+                  title={isItems ? 'Adds up from the items and charges below' : undefined}
+                  style={isItems ? { opacity: 0.7, cursor: 'not-allowed' } : undefined}
                 />
               </div>
             </div>
@@ -339,10 +388,40 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 >
                   By Percentages (%)
                 </button>
+                <button
+                  type="button"
+                  className={`tab-btn ${splitType === 'ITEMS' ? 'active' : ''}`}
+                  onClick={() => {
+                    setSplitType('ITEMS');
+                    if (items.length === 0) setItems([blankItem(groupMembers.map(m => m.id))]);
+                  }}
+                >
+                  By items
+                </button>
               </div>
             </div>
 
-            {/* Split Participants Breakdown List */}
+            {/* Items, when the bill is split line by line */}
+            {isItems ? (
+              <div>
+                {splitValidationMsg && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--color-negative)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <AlertCircle size={14} />
+                    <span>{splitValidationMsg}</span>
+                  </div>
+                )}
+                <ItemsEditor
+                  members={groupMembers}
+                  items={items}
+                  onItemsChange={setItems}
+                  charges={charges}
+                  onChargesChange={setCharges}
+                  currency={currentGroup ? currentGroup.currency : '₹'}
+                  payerId={parseInt(paidById, 10)}
+                />
+              </div>
+            ) : (
+            /* Split Participants Breakdown List */
             <div style={{
               backgroundColor: 'rgba(15, 23, 42, 0.5)',
               border: '1px solid var(--border-color)',
@@ -433,6 +512,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 );
               })}
             </div>
+            )}
           </div>
 
           <div className="modal-footer">

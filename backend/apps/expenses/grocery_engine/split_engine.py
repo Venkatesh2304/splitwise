@@ -4,6 +4,7 @@ from django.utils import timezone
 from apps.groups.models import Group
 from apps.users.models import UserProfile
 from apps.expenses.models import Expense, ExpensePayer, ExpenseShare
+from apps.expenses.itemized import split_items
 from apps.notifications import events
 
 class GrocerySplitEngine:
@@ -95,47 +96,8 @@ class GrocerySplitEngine:
                     owed_amounts[assigned_ids[0]] = round(owed_amounts[assigned_ids[0]] + diff, 2)
 
         elif split_mode == "ITEMIZED":
-            sum_products = sum(it["price"] for it in products_json_list)
-            common_fees = max(0.0, round(total_amount - sum_products, 2))
-
-            temp_product_subtotals = {m_id: 0.0 for m_id in member_ids}
-
-            for item in products_json_list:
-                item_price = item["price"]
-                item_mode = item["split_type"]
-                
-                if item_mode == "PERSONAL":
-                    target_ids = item.get("assigned_member_ids", [])
-                    personal_id = target_ids[0] if target_ids else buyer.id
-                    if personal_id in temp_product_subtotals:
-                        temp_product_subtotals[personal_id] += item_price
-                elif item_mode == "ALL":
-                    n = len(member_ids)
-                    share = item_price / n if n > 0 else 0.0
-                    for m_id in member_ids:
-                        temp_product_subtotals[m_id] += share
-                elif item_mode == "SPECIFIC":
-                    target_ids = [m_id for m_id in item.get("assigned_member_ids", member_ids) if m_id in member_ids]
-                    if not target_ids:
-                        target_ids = member_ids
-                    n = len(target_ids)
-                    share = item_price / n if n > 0 else 0.0
-                    for m_id in target_ids:
-                        if m_id in temp_product_subtotals:
-                            temp_product_subtotals[m_id] += share
-
-            total_subtotals_sum = sum(temp_product_subtotals.values()) or 1.0
-
-            # Distribute common fees proportionally based on each person's item subtotal
-            for m_id in member_ids:
-                sub = temp_product_subtotals[m_id]
-                fee_share = (sub / total_subtotals_sum) * common_fees if common_fees > 0 else 0.0
-                owed_amounts[m_id] = round(sub + fee_share, 2)
-
-            calc_total = sum(owed_amounts.values())
-            diff = round(total_amount - calc_total, 2)
-            if diff != 0 and buyer.id in owed_amounts:
-                owed_amounts[buyer.id] = round(owed_amounts[buyer.id] + diff, 2)
+            # Same arithmetic a hand-entered itemised expense uses
+            owed_amounts = split_items(total_amount, products_json_list, member_ids, buyer.id)
 
         # 4. Save Expense to Database
         placed_at_str = str(placed_at or "").strip()
