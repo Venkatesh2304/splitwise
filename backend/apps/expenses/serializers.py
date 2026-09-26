@@ -164,7 +164,10 @@ class ExpenseSerializer(serializers.ModelSerializer):
         amount = validated_data.get('amount')
         items, member_ids, members = self._normalise_items(raw_items, group, amount)
 
-        payer_id = payers_data[0]['user'].id if payers_data else member_ids[0]
+        # With several payers the rounding paisa goes to whoever put in the most, which is
+        # also what the form previews
+        biggest = max(payers_data, key=lambda p: float(p['amount_paid']), default=None)
+        payer_id = biggest['user'].id if biggest else member_ids[0]
         owed_map = split_items(float(amount), items, member_ids, payer_id)
         shares_data = [{'user': member} for member in members]
 

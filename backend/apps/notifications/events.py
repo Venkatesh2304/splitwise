@@ -136,7 +136,12 @@ def _payer_phrase(snapshot, uid):
         return None
     if payers == [uid]:
         return "you paid"
-    first = "You" if payers[0] == uid else snapshot["names"].get(payers[0], "Someone")
+    # Put the reader first when they're one of the payers, so they aren't told
+    # "Akash & 1 other paid" about a bill they helped pay
+    if uid in payers:
+        others = len(payers) - 1
+        return f"you & {others} other{'s' if others > 1 else ''} paid"
+    first = snapshot["names"].get(payers[0], "Someone")
     if len(payers) == 1:
         return f"{first} paid"
     return f"{first} & {len(payers) - 1} other{'s' if len(payers) > 2 else ''} paid"
