@@ -22,6 +22,7 @@ def resolve_blinkit_placed_at(placed_str):
         s = re.sub(r'^yesterday', yest_ist.strftime("%d %b %Y"), s, flags=re.IGNORECASE)
     return s
 
+from django.db.models import Q
 from apps.groups.models import Group
 from apps.users.models import UserProfile
 from apps.expenses.models import Expense, ExpensePayer, ExpenseShare
@@ -485,7 +486,9 @@ def blinkit_orders(request):
         output_orders = []
         for ord_item in orders_list:
             ord_id = str(ord_item.get("order_id", ""))
-            existing_exp = Expense.objects.filter(description__icontains=ord_id).first()
+            existing_exp = Expense.objects.filter(
+                Q(description__icontains=ord_id) | Q(notes__icontains=f'"order_id": "{ord_id}"') | Q(notes__icontains=ord_id)
+            ).first()
             
             ord_copy = dict(ord_item)
             if existing_exp:

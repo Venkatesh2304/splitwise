@@ -949,6 +949,11 @@ export default function GroupDetailView({
                           <>
                             <span>Order Date: <strong style={{ color: '#ffffff' }}>{orderDateDisplay}</strong></span>
                             <span className="balance-tag neutral" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem' }}>{source.label}</span>
+                            {source.orderId && (
+                              <span className="balance-tag neutral" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', opacity: 0.85 }}>
+                                #{source.orderId}
+                              </span>
+                            )}
                           </>
                         ) : source.isItemized ? (
                           <>

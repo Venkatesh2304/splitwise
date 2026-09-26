@@ -200,3 +200,112 @@ export function calculateItemBreakdown(exp, members = [], myUserId = null) {
     myTotalShare,
   };
 }
+
+export const FOOD_KEYWORD_RULES = [
+  // Multi-word specific items
+  [/\bgroundnut oil\b/i, 'Groundnut Oil'],
+  [/\bmustard oil\b/i, 'Mustard Oil'],
+  [/\bsunflower oil\b/i, 'Sunflower Oil'],
+  [/\brefined oil\b/i, 'Cooking Oil'],
+  [/\bcoconut oil\b/i, 'Coconut Oil'],
+  [/\blady finger\b|\bbhindi\b/i, 'Lady Finger'],
+  [/\bfrench fries\b/i, 'Fries'],
+  [/\bsweet corn\b/i, 'Sweet Corn'],
+  [/\bbiryani kit\b/i, 'Biryani Kit'],
+  [/\bdark fantasy\b/i, 'Biscuits'],
+  [/\b(idli\s*&\s*dosa|idli|dosa)\s*batter\b/i, 'Batter'],
+  [/\bbatter\b/i, 'Batter'],
+  [/\bred bull\b/i, 'Energy Drink'],
+  [/\braw pressery\b/i, 'Juice'],
+  [/\bgarlic bread\b/i, 'Garlic Bread'],
+  [/\bice cream\b/i, 'Ice Cream'],
+  [/\bpeanut butter\b/i, 'Peanut Butter'],
+
+  // Core single-word items
+  [/\bchicken\b/i, 'Chicken'],
+  [/\bmutton\b/i, 'Mutton'],
+  [/\bfish\b/i, 'Fish'],
+  [/\bprawns?\b/i, 'Prawns'],
+  [/\bsausages?\b/i, 'Sausages'],
+  [/\bmeat\b/i, 'Meat'],
+  [/\beggs?\b/i, 'Eggs'],
+  [/\bmilk\b/i, 'Milk'],
+  [/\b(curd|dahi|yogurt)\b/i, 'Curd'],
+  [/\bbread\b/i, 'Bread'],
+  [/\b(pav|bun|croissant)\b/i, 'Bakery'],
+  [/\b(banana|kela)s?\b/i, 'Banana'],
+  [/\b(onion|pyaaz)s?\b/i, 'Onion'],
+  [/\b(potato|aloo)s?\b/i, 'Potato'],
+  [/\b(tomato|tamatar)s?\b/i, 'Tomato'],
+  [/\bghee\b/i, 'Ghee'],
+  [/\boil\b/i, 'Oil'],
+  [/\b(rice|sonamasuri|basmati)\b/i, 'Rice'],
+  [/\bpoha\b/i, 'Poha'],
+  [/\b(dal|toor|chana|rajma|moong)\b/i, 'Dal'],
+  [/\bsugar\b/i, 'Sugar'],
+  [/\bsalt\b/i, 'Salt'],
+  [/\b(atta|flour|maida|besan)\b/i, 'Atta'],
+  [/\b(masala|spices?|turmeric|pepper|jeera|cumin)\b/i, 'Spices'],
+  [/\bpaneer\b/i, 'Paneer'],
+  [/\bcheese\b/i, 'Cheese'],
+  [/\bbuttermilk\b/i, 'Buttermilk'],
+  [/\bbutter\b/i, 'Butter'],
+  [/\bgranola\b/i, 'Granola'],
+  [/\bmuesli\b/i, 'Muesli'],
+  [/\boats\b/i, 'Oats'],
+  [/\bcorn flakes\b/i, 'Cereals'],
+  [/\b(chips|crisps|kurkure|nachos)\b/i, 'Chips'],
+  [/\b(biscuits?|cookies?)\b/i, 'Biscuits'],
+  [/\bchocolates?\b/i, 'Chocolate'],
+  [/\b(pizza|burger|sandwich|momos)\b/i, 'Snacks'],
+  [/\b(noodles?|maggi|pasta)\b/i, 'Noodles'],
+  [/\bjuice\b/i, 'Juice'],
+  [/\bcoffee\b/i, 'Coffee'],
+  [/\btea\b/i, 'Tea'],
+  [/\b(detergent|surf excel|harpic|vim)\b/i, 'Cleaning'],
+  [/\b(shampoo|soap|shower gel|body\s*wash|facewash)\b/i, 'Personal Care'],
+
+  // Specific vegetables & fruits
+  [/\b(carrot|beans|capsicum|cucumber|palak|spinach|mushroom|cauliflower|cabbage|peas|matar|ginger|garlic|coriander|chilli|chili|lemon)\b/i, 'Vegetables'],
+  [/\b(apple|pomegranate|orange|watermelon|papaya|grapes|avocado)\b/i, 'Fruits'],
+
+  // Brand fallbacks
+  [/\bmeatizon\b/i, 'Chicken'],
+  [/\blicious\b/i, 'Chicken'],
+  [/\bfreshtohome\b/i, 'Meat'],
+];
+
+export function extractTopProductKeyword(productName) {
+  if (!productName) return 'Groceries';
+  for (const [pattern, display] of FOOD_KEYWORD_RULES) {
+    if (pattern.test(productName)) {
+      return display;
+    }
+  }
+  const words = productName.match(/[A-Za-z]+/g) || [];
+  const ignore = new Set(['pack', 'pcs', 'gm', 'g', 'kg', 'ml', 'l', 'fresh', 'premium', 'daily', 'delight', 'pure', 'classic']);
+  const filtered = words.filter(w => !ignore.has(w.toLowerCase()) && w.length > 1);
+  if (filtered.length > 0) {
+    return filtered.slice(0, 2).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  }
+  return 'Groceries';
+}
+
+export function deriveOrderTitle(platformName, items, orderId) {
+  const plat = (platformName || '').toLowerCase();
+  const prefix = plat.includes('swiggy') ? 'Swiggy' : (plat.includes('blinkit') ? 'Blinkit' : (platformName || 'Order'));
+
+  if (Array.isArray(items) && items.length > 0) {
+    const sorted = [...items].sort((a, b) => (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0));
+    for (const it of sorted) {
+      if (it && it.name) {
+        const kw = extractTopProductKeyword(it.name);
+        if (kw) return `${prefix}: ${kw}`;
+      }
+    }
+  }
+
+  if (orderId) return `${prefix}: Order #${orderId}`;
+  return `${prefix}: Groceries`;
+}
+

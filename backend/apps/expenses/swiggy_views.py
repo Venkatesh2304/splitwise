@@ -7,6 +7,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 
+from django.db.models import Q
 from apps.users.models import UserProfile
 from apps.expenses.models import Expense
 from apps.expenses.grocery_engine import GrocerySplitEngine
@@ -410,7 +411,9 @@ def swiggy_orders(request):
     output_orders = []
     for ord_item in orders_list:
         ord_id = str(ord_item.get("order_id", ""))
-        existing_exp = Expense.objects.filter(description__icontains=ord_id).first()
+        existing_exp = Expense.objects.filter(
+            Q(description__icontains=ord_id) | Q(notes__icontains=f'"order_id": "{ord_id}"') | Q(notes__icontains=ord_id)
+        ).first()
         
         ord_copy = dict(ord_item)
         if existing_exp:
