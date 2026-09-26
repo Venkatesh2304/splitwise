@@ -19,14 +19,24 @@ from apps.expenses.blinkit_views import get_user_profile_by_req
 
 MCP_BASE = "https://mcp.swiggy.com"
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
 def clean_placed_at(status_text, created_at_raw=None):
     if created_at_raw:
         try:
-            dt_str = str(created_at_raw).replace("Z", "+00:00")
-            dt = datetime.fromisoformat(dt_str)
-            return dt.strftime("%d %b %Y, %I:%M %p")
+            if isinstance(created_at_raw, (int, float)) or (isinstance(created_at_raw, str) and created_at_raw.isdigit()):
+                val = float(created_at_raw)
+                if val > 1e11: val = val / 1000.0
+                dt = datetime.fromtimestamp(val, tz=timezone.utc)
+            else:
+                dt_str = str(created_at_raw).replace("Z", "+00:00")
+                dt = datetime.fromisoformat(dt_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            dt_ist = dt.astimezone(IST_TZ)
+            return dt_ist.strftime("%d %b %Y, %I:%M %p")
         except Exception:
             pass
 

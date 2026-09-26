@@ -1,13 +1,46 @@
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 from apps.expenses.models import GroceryOrderRecord, GroceryOrderItem
 
 logger = logging.getLogger(__name__)
 
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+def resolve_placed_at_ist(placed_at_str: str, fresh_ord: Optional[Dict[str, Any]] = None) -> str:
+    s = str(placed_at_str or "").strip()
+    now_ist = datetime.now(IST_TZ)
+
+    # 1. If raw payload has createdAt / orderTime in UTC, format in IST
+    if fresh_ord:
+        raw_payload = fresh_ord.get("full_order_json") or fresh_ord.get("raw_payload") or fresh_ord
+        raw_time = raw_payload.get("createdAt") or raw_payload.get("orderTime") or raw_payload.get("created_at") or raw_payload.get("order_time")
+        if raw_time:
+            try:
+                if isinstance(raw_time, (int, float)) or (isinstance(raw_time, str) and raw_time.isdigit()):
+                    val = float(raw_time)
+                    if val > 1e11: val = val / 1000.0
+                    dt = datetime.fromtimestamp(val, tz=timezone.utc)
+                else:
+                    dt = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(IST_TZ).strftime("%d %b %Y, %I:%M %p")
+            except Exception:
+                pass
+
+    # 2. Resolve relative keywords like "today" or "yesterday"
+    if s.lower().startswith("today"):
+        s = re.sub(r'^today', now_ist.strftime("%d %b %Y"), s, flags=re.IGNORECASE)
+    elif s.lower().startswith("yesterday"):
+        yest = now_ist - timedelta(days=1)
+        s = re.sub(r'^yesterday', yest.strftime("%d %b %Y"), s, flags=re.IGNORECASE)
+
+    return s
+
 def _sort_orders_descending(orders_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    now = datetime.now()
+    now = datetime.now(IST_TZ)
     def get_sort_key(o):
         placed_at = str(o.get("placed_at") or "").strip()
         ord_id = str(o.get("order_id") or "").strip()
@@ -72,7 +105,7 @@ class OrderStoreManager:
             if not ord_id or ord_id == "None":
                 continue
 
-            placed_at = str(fresh_ord.get("placed_at") or "")
+            placed_at = resolve_placed_at_ist(fresh_ord.get("placed_at"), fresh_ord)
             total_amt = float(fresh_ord.get("total_amount") or fresh_ord.get("amount") or 0.0)
             other_chg = float(fresh_ord.get("other_charges") or 0.0)
             prod_names = fresh_ord.get("product_names") or []

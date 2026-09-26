@@ -2,10 +2,25 @@ import json
 import time
 import uuid
 import re
+from datetime import datetime, timezone, timedelta
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 from curl_cffi import requests
+
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+def resolve_blinkit_placed_at(placed_str):
+    if not placed_str:
+        return "Recently"
+    s = str(placed_str).strip()
+    now_ist = datetime.now(IST_TZ)
+    if s.lower().startswith("today"):
+        s = re.sub(r'^today', now_ist.strftime("%d %b %Y"), s, flags=re.IGNORECASE)
+    elif s.lower().startswith("yesterday"):
+        yest_ist = now_ist - timedelta(days=1)
+        s = re.sub(r'^yesterday', yest_ist.strftime("%d %b %Y"), s, flags=re.IGNORECASE)
+    return s
 
 from apps.groups.models import Group
 from apps.users.models import UserProfile
@@ -204,7 +219,7 @@ def extract_blinkit_orders_from_sdui(root):
                     price_str = re.sub(r'[^\d.]', '', price_str)
                     if price_str: total_amount = float(price_str)
                 if "subtitle" in item_data:
-                    placed_at = item_data["subtitle"].get("text", placed_at)
+                    placed_at = resolve_blinkit_placed_at(item_data["subtitle"].get("text", placed_at))
                 if "horizontal_item_list" in item_data:
                     for h_item in item_data["horizontal_item_list"]:
                         h_data = h_item.get("data") or {}
@@ -237,7 +252,7 @@ def extract_blinkit_orders_from_sdui(root):
 
             if ord_id_raw:
                 order_id = str(ord_id_raw).strip()
-                placed_at = data_obj.get("placed_at") or data_obj.get("subtitle") or data_obj.get("status_text") or "Recently"
+                placed_at = resolve_blinkit_placed_at(data_obj.get("placed_at") or data_obj.get("subtitle") or data_obj.get("status_text") or "Recently")
                 total = float(data_obj.get("total_amount") or data_obj.get("amount") or data_obj.get("price") or 0.0)
 
                 items_raw = data_obj.get("items") or data_obj.get("order_items") or []

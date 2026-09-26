@@ -936,6 +936,13 @@ export default function GroupDetailView({
                         const parsedNotes = JSON.parse(selectedExpenseDetails.notes);
                         if (parsedNotes.placed_at) {
                           orderDateDisplay = parsedNotes.placed_at;
+                          if (/^today/i.test(orderDateDisplay) && selectedExpenseDetails.date) {
+                            const formattedD = formatDateGroupKey({ date: selectedExpenseDetails.date });
+                            orderDateDisplay = orderDateDisplay.replace(/^today/i, formattedD);
+                          } else if (/^yesterday/i.test(orderDateDisplay) && selectedExpenseDetails.date) {
+                            const formattedD = formatDateGroupKey({ date: selectedExpenseDetails.date });
+                            orderDateDisplay = orderDateDisplay.replace(/^yesterday/i, formattedD);
+                          }
                         }
                       } catch(e) {}
                     }
