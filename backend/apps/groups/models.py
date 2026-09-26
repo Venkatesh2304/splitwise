@@ -22,6 +22,9 @@ class GroupMember(models.Model):
     group = models.ForeignKey(Group, on_delete=models.CASCADE)
     user = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
     joined_at = models.DateTimeField(auto_now_add=True)
+    # When this person last looked at the group. Null means never, and joined_at is used
+    # instead, so a new member isn't handed the whole history as unread.
+    last_seen_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ('group', 'user')

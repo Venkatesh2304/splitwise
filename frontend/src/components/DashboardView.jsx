@@ -1,9 +1,87 @@
 import React, { useEffect, useState } from 'react';
 import { useUser } from '../context/UserContext';
 import { api } from '../services/api';
-import { Wallet, Users, ArrowUpRight, ArrowDownRight, Plus } from 'lucide-react';
+import { Wallet, Users, ArrowUpRight, ArrowDownRight, Plus, Bell, X } from 'lucide-react';
+import { SECURE_APP_URL } from '../config';
 
-export default function DashboardView({ groups, onSelectGroup, onOpenAddGroup, onOpenAddExpense }) {
+const NUDGE_DISMISSED_KEY = 'splitwise_push_nudge_dismissed';
+
+function NotificationNudge({ pushState, onEnablePush }) {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(NUDGE_DISMISSED_KEY) === '1');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const offerSecureLink = pushState === 'insecure' && SECURE_APP_URL;
+  if (dismissed || !(pushState === 'off' || offerSecureLink)) return null;
+
+  const dismiss = () => {
+    localStorage.setItem(NUDGE_DISMISSED_KEY, '1');
+    setDismissed(true);
+  };
+
+  const turnOn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onEnablePush();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: '1.25rem', padding: '0.85rem 1rem', display: 'flex', gap: '0.75rem', alignItems: 'flex-start', borderLeft: '4px solid var(--accent-primary)' }}>
+      <Bell size={20} color="var(--accent-primary)" style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#ffffff' }}>
+          {offerSecureLink ? 'Notifications need the new secure link' : 'Get notified about changes'}
+        </div>
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+          {offerSecureLink
+            ? 'Open the https version of the app, log in, then add it to your home screen in place of this one.'
+            : 'A notification when someone adds, edits or deletes an expense you’re in, or settles up with you, even when the app is closed.'}
+        </div>
+        {error && <div style={{ fontSize: '0.775rem', color: 'var(--color-negative)', marginTop: '0.35rem' }}>{error}</div>}
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.6rem' }}>
+          {offerSecureLink ? (
+            <a className="btn btn-primary btn-sm" href={SECURE_APP_URL} style={{ textDecoration: 'none' }}>Open secure app</a>
+          ) : (
+            <button className="btn btn-primary btn-sm" onClick={turnOn} disabled={busy}>{busy ? 'Turning on…' : 'Turn on'}</button>
+          )}
+          <button className="btn btn-secondary btn-sm" onClick={dismiss}>Not now</button>
+        </div>
+      </div>
+      <button onClick={dismiss} aria-label="Dismiss" style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: 0 }}>
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
+
+export function UnseenBadge({ count }) {
+  return (
+    <span
+      title={`${count} ${count === 1 ? 'change' : 'changes'} you haven't seen`}
+      style={{
+        fontSize: '0.65rem',
+        fontWeight: 800,
+        color: '#0f172a',
+        backgroundColor: 'var(--accent-primary)',
+        borderRadius: '999px',
+        padding: '0.05rem 0.4rem',
+        minWidth: '1.15rem',
+        textAlign: 'center',
+        flexShrink: 0
+      }}
+    >
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
+
+export default function DashboardView({ groups, onSelectGroup, onOpenAddGroup, onOpenAddExpense, pushState, onEnablePush }) {
   const { activeUser } = useUser();
   const [groupDetailsMap, setGroupDetailsMap] = useState({});
   const [loading, setLoading] = useState(true);
@@ -81,6 +159,8 @@ export default function DashboardView({ groups, onSelectGroup, onOpenAddGroup, o
         </div>
       </div>
 
+      <NotificationNudge pushState={pushState} onEnablePush={onEnablePush} />
+
       {/* Single Net Balance Card */}
       <div style={{ marginBottom: '1.75rem' }}>
         <div className="card" style={{
@@ -144,8 +224,9 @@ export default function DashboardView({ groups, onSelectGroup, onOpenAddGroup, o
                 >
                   <div>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                      <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#ffffff' }}>
+                      <h4 style={{ fontSize: '1rem', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                         {group.name}
+                        {group.unseen_count > 0 && <UnseenBadge count={group.unseen_count} />}
                       </h4>
                       <span className="balance-tag neutral" style={{ fontSize: '0.725rem' }}>
                         {group.category}

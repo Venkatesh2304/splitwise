@@ -11,5 +11,10 @@ export default defineConfig({
         changeOrigin: true,
       }
     }
-  }
+  },
+  preview: {
+    // The HTTPS hostname nginx forwards (see NOTIFICATIONS_SETUP.md). Vite rejects
+    // unknown Host headers; plain IP addresses are always allowed.
+    allowedHosts: ['.duckdns.org'],
+  },
 })

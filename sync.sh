@@ -26,6 +26,9 @@ echo "==> [sync.sh] Running Django database migrations..."
 cd "$PROJECT_DIR/backend"
 python manage.py migrate --noinput
 
+echo "==> [sync.sh] Ensuring web-push key exists (never replaced once created)..."
+python manage.py ensure_vapid_keys
+
 echo "==> [sync.sh] Seeding initial 5 users (venkatesh, rahul, akash, anish, aatesh)..."
 python manage.py setup_initial_users
 

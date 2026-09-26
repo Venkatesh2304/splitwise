@@ -1,11 +1,17 @@
 import React from 'react';
 import { LogOut } from 'lucide-react';
+import NotificationBell from './NotificationBell';
+import ProfileMenu from './ProfileMenu';
 
 export default function Header({
   currentUser,
   activeTab,
   onTabChange,
-  onLogout
+  onLogout,
+  pushState,
+  onEnablePush,
+  onDisablePush,
+  onTestPush
 }) {
   return (
     <header style={{
@@ -27,27 +33,18 @@ export default function Header({
         </span>
       </div>
 
-      {/* Right Actions: User Profile & Logout */}
+      {/* Right Actions: Notifications, User Profile & Logout */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         {currentUser && (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.35rem',
-            backgroundColor: 'rgba(30, 41, 59, 0.8)',
-            padding: '0.25rem 0.55rem',
-            borderRadius: '9999px',
-            fontSize: '0.8rem',
-            color: '#ffffff'
-          }}>
-            <img
-              src={currentUser.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.name}`}
-              alt={currentUser.name}
-              style={{ width: '20px', height: '20px', borderRadius: '50%' }}
-            />
-            <span style={{ fontWeight: 600 }}>{currentUser.name} {currentUser.phone_number ? `(${currentUser.phone_number})` : ''}</span>
-          </div>
+          <NotificationBell
+            state={pushState}
+            onEnable={onEnablePush}
+            onDisable={onDisablePush}
+            onTest={onTestPush}
+          />
         )}
+
+        {currentUser && <ProfileMenu currentUser={currentUser} onLogout={onLogout} />}
 
         <button
           onClick={onLogout}

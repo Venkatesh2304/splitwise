@@ -1,5 +1,6 @@
 import React from 'react';
 import { LayoutDashboard, Plus, Users, Compass, Home, PartyPopper, Package } from 'lucide-react';
+import { UnseenBadge } from './DashboardView';
 
 const categoryIcons = {
   TRIP: <Compass size={18} color="#06b6d4" />,
@@ -106,9 +107,13 @@ export default function Sidebar({ groups, activeGroupId, onSelectGroup, onSelect
                     fontWeight: isActive ? 700 : 500,
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
-                    textOverflow: 'ellipsis'
+                    textOverflow: 'ellipsis',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.4rem'
                   }}>
-                    {group.name}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.name}</span>
+                    {group.unseen_count > 0 && <UnseenBadge count={group.unseen_count} />}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
                     {group.members ? group.members.length : 0} members

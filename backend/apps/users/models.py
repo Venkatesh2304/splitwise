@@ -7,6 +7,9 @@ class UserProfile(models.Model):
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=20, blank=True, default='')
     avatar_url = models.URLField(blank=True, default='')
+    # UPI id (VPA) for settle-up links. Kept out of the user list on purpose: it's only
+    # served from /api/users/<id>/upi/, when someone is about to pay this person.
+    upi_id = models.CharField(max_length=100, blank=True, default='')
     
     # Blinkit Session Fields (Stored per user in DB)
     blinkit_access_token = models.TextField(blank=True, null=True)

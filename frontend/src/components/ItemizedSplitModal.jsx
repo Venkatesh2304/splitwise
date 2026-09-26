@@ -200,6 +200,7 @@ export default function ItemizedSplitModal({
       const payload = {
         group_id: groceriesGroup.id,
         buyer_id: buyerId || (currentUser ? currentUser.id : allMemberIds[0]),
+        actor_id: currentUser ? currentUser.id : undefined,
         order_id: String(order.order_id || ''),
         description: finalDescription,
         placed_at: order.placed_at || '',
