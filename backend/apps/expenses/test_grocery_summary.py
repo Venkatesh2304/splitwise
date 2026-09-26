@@ -149,3 +149,43 @@ class GrocerySummaryTestCase(TestCase):
             self.assertEqual(dining_cat["spend"], 500.0)
         finally:
             exp_manual.delete()
+
+    def test_non_itemized_split_included_in_summary(self):
+        exp_wifi = Expense.objects.create(
+            group=self.group,
+            description="Flat Wi-Fi Bill",
+            amount=600.0,
+            split_type="EQUAL",
+            created_by=self.user1
+        )
+        ExpensePayer.objects.create(expense=exp_wifi, user=self.user1, amount_paid=600.0)
+        ExpenseShare.objects.create(expense=exp_wifi, user=self.user1, amount_owed=300.0)
+        ExpenseShare.objects.create(expense=exp_wifi, user=self.user2, amount_owed=300.0)
+
+        try:
+            summary = build_grocery_summary(group=self.group)
+            self.assertEqual(summary["total_orders"], 2)
+            self.assertEqual(summary["itemized_orders"], 1)
+            self.assertEqual(summary["non_itemized_orders"], 1)
+            self.assertEqual(summary["itemized_spend"], 1491.0)
+            self.assertEqual(summary["non_itemized_spend"], 600.0)
+            self.assertEqual(summary["total_spend"], 2091.0)
+
+            # Check that "Non-Itemized Spends" exists in categories
+            non_item_cat = next(c for c in summary["categories"] if c["name"] == "Non-Itemized Spends")
+            self.assertEqual(non_item_cat["spend"], 600.0)
+
+            # Check user filter for Akash: 1245.5 + 300 = 1545.5
+            summary_akash = build_grocery_summary(group=self.group, user_id=self.user1.id)
+            self.assertEqual(summary_akash["itemized_spend"], 1245.5)
+            self.assertEqual(summary_akash["non_itemized_spend"], 300.0)
+            self.assertEqual(summary_akash["total_spend"], 1545.5)
+
+            # Check user filter for Rahul: 245.5 + 300 = 545.5
+            summary_rahul = build_grocery_summary(group=self.group, user_id=self.user2.id)
+            self.assertEqual(summary_rahul["itemized_spend"], 245.5)
+            self.assertEqual(summary_rahul["non_itemized_spend"], 300.0)
+            self.assertEqual(summary_rahul["total_spend"], 545.5)
+        finally:
+            exp_wifi.delete()
+

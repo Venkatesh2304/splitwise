@@ -118,13 +118,15 @@ class GrocerySplitEngine:
         # Delete any pre-existing split for this order ID
         Expense.objects.filter(description__icontains=str(order_id)).delete()
 
+        actor = events.resolve_actor(actor_id) or buyer
+
         expense = Expense.objects.create(
             group=group,
             description=description,
             amount=total_amount,
             category="FOOD",
             split_type="CUSTOM",
-            created_by=buyer,
+            created_by=actor,
             notes=notes_str
         )
 
@@ -144,7 +146,6 @@ class GrocerySplitEngine:
                     percentage=round((owed / total_amount) * 100, 2) if total_amount > 0 else 0.0
                 )
 
-        actor = events.resolve_actor(actor_id) or buyer
         tag = f"order-{order_id}"
         if before:
             # Keep the original position in the timeline; mark it edited

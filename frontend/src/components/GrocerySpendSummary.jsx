@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { ShoppingBag, Tag, Layers, Users, ChevronDown, ChevronUp } from 'lucide-react';
+import { ShoppingBag, Tag, Layers, Users, ChevronDown, ChevronUp, Receipt } from 'lucide-react';
 
 const round = (n) => Math.round(Number(n) || 0).toLocaleString('en-IN');
 
@@ -33,7 +33,7 @@ export default function GrocerySpendSummary({ groupId, initialGroceryData, curre
           setGroceryData(res);
         }
       } catch (err) {
-        console.error('Failed to load grocery spend summary:', err);
+        console.error('Failed to load spend summary:', err);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -50,7 +50,7 @@ export default function GrocerySpendSummary({ groupId, initialGroceryData, curre
   if (!groceryData && loading) {
     return (
       <div className="card" style={{ padding: '1.25rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.825rem' }}>
-        Loading grocery item breakdown…
+        Loading spend breakdown…
       </div>
     );
   }
@@ -60,7 +60,10 @@ export default function GrocerySpendSummary({ groupId, initialGroceryData, curre
   const maxSpend = Math.max(...rows.map((r) => r.spend), 1);
   const totalSpend = groceryData?.total_spend || 0;
   const totalOrders = groceryData?.total_orders || 0;
-  const totalQuantity = groceryData?.total_quantity || 0;
+  const itemizedSpend = groceryData?.itemized_spend ?? totalSpend;
+  const nonItemizedSpend = groceryData?.non_itemized_spend ?? 0;
+  const itemizedOrders = groceryData?.itemized_orders ?? totalOrders;
+  const nonItemizedOrders = groceryData?.non_itemized_orders ?? 0;
 
   return (
     <div className="card" style={{ padding: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
@@ -68,15 +71,15 @@ export default function GrocerySpendSummary({ groupId, initialGroceryData, curre
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-            <ShoppingBag size={17} style={{ color: 'var(--accent-primary)' }} />
-            <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#ffffff', letterSpacing: '-0.01em' }}>
-              Itemized & Grocery Spends
+            <Receipt size={17} style={{ color: 'var(--accent-primary)' }} />
+            <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#ffffff', letterSpacing: '-0.01em' }}>
+              Spendings
             </span>
           </div>
           <p style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
             {filterUser === 'all'
-              ? 'Itemized group spending categorized by deterministic keywords'
-              : `Exact item splits assigned to ${groceryData?.active_user?.name || 'this user'}`}
+              ? 'Itemized and non-itemized group spends categorized by deterministic keywords'
+              : `Exact splits assigned to ${groceryData?.active_user?.name || 'this user'}`}
           </p>
         </div>
 
@@ -116,6 +119,73 @@ export default function GrocerySpendSummary({ groupId, initialGroceryData, curre
           >
             All Time
           </button>
+        </div>
+      </div>
+
+      {/* High-Level Spend Breakdown Numbers: Itemized vs Non-Itemized */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+        gap: '0.5rem',
+      }}>
+        <div style={{
+          padding: '0.65rem 0.75rem',
+          backgroundColor: 'rgba(255, 255, 255, 0.04)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border-color)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.15rem'
+        }}>
+          <span style={{ fontSize: '0.675rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+            Total Spend
+          </span>
+          <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#ffffff' }}>
+            {currency}{round(totalSpend)}
+          </span>
+          <span style={{ fontSize: '0.675rem', color: 'var(--text-dim)' }}>
+            {totalOrders} {totalOrders === 1 ? 'expense' : 'expenses'}
+          </span>
+        </div>
+
+        <div style={{
+          padding: '0.65rem 0.75rem',
+          backgroundColor: 'rgba(16, 185, 129, 0.08)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid rgba(16, 185, 129, 0.25)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.15rem'
+        }}>
+          <span style={{ fontSize: '0.675rem', fontWeight: 700, color: 'var(--accent-primary)', textTransform: 'uppercase' }}>
+            Itemized Split
+          </span>
+          <span style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--accent-primary)' }}>
+            {currency}{round(itemizedSpend)}
+          </span>
+          <span style={{ fontSize: '0.675rem', color: 'var(--text-dim)' }}>
+            {itemizedOrders} {itemizedOrders === 1 ? 'order' : 'orders'}
+          </span>
+        </div>
+
+        <div style={{
+          padding: '0.65rem 0.75rem',
+          backgroundColor: 'rgba(56, 189, 248, 0.08)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid rgba(56, 189, 248, 0.25)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.15rem'
+        }}>
+          <span style={{ fontSize: '0.675rem', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase' }}>
+            Non-Itemized
+          </span>
+          <span style={{ fontSize: '1.15rem', fontWeight: 800, color: '#38bdf8' }}>
+            {currency}{round(nonItemizedSpend)}
+          </span>
+          <span style={{ fontSize: '0.675rem', color: 'var(--text-dim)' }}>
+            {nonItemizedOrders} {nonItemizedOrders === 1 ? 'expense' : 'expenses'}
+          </span>
         </div>
       </div>
 
@@ -184,7 +254,7 @@ export default function GrocerySpendSummary({ groupId, initialGroceryData, curre
             {currency}{round(totalSpend)}
           </span>
           <span style={{ color: 'var(--text-muted)', marginLeft: '0.4rem' }}>
-            {filterUser === 'all' ? 'group spend' : `split on ${groceryData?.active_user?.name || 'user'}`} · {totalOrders} {totalOrders === 1 ? 'order' : 'orders'}
+            {filterUser === 'all' ? 'total spend' : `split on ${groceryData?.active_user?.name || 'user'}`} · {totalOrders} {totalOrders === 1 ? 'expense' : 'expenses'}
           </span>
         </div>
 

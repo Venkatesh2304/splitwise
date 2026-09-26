@@ -110,31 +110,25 @@ def build_grocery_summary(group=None, user_id=None, month=None):
         except (ValueError, TypeError):
             pass
 
-    # Collect available months from grocery expenses
+    # Collect available months from all expenses
     month_counts = Counter()
-    grocery_expenses_with_items = []
-    
     for e in group_expenses:
-        items = extract_expense_items(e)
-        if items:
-            m_str = e.date.strftime('%Y-%m')
-            month_counts[m_str] += 1
-            grocery_expenses_with_items.append((e, items))
+        m_str = e.date.strftime('%Y-%m')
+        month_counts[m_str] += 1
 
     available_months = sorted(month_counts.keys(), reverse=True)
     
     # Filter by month if specified and not 'all'
     if month and str(month).lower() not in ('all', 'none', ''):
-        filtered = []
-        for e, items in grocery_expenses_with_items:
-            if e.date.strftime('%Y-%m') == str(month):
-                filtered.append((e, items))
-        grocery_expenses_with_items = filtered
+        group_expenses = [e for e in group_expenses if e.date.strftime('%Y-%m') == str(month)]
 
     # Aggregations
     total_spend = 0.0
+    itemized_spend = 0.0
+    non_itemized_spend = 0.0
     total_items = 0
-    orders_counted = set()
+    itemized_orders_counted = set()
+    non_itemized_orders_counted = set()
     
     cat_data = defaultdict(lambda: {
         'spend': 0.0,
@@ -152,68 +146,99 @@ def build_grocery_summary(group=None, user_id=None, month=None):
         'top_by_spend': defaultdict(float)
     })
     
-    for e, items in grocery_expenses_with_items:
+    for e in group_expenses:
+        items = extract_expense_items(e)
         expense_shares = {s.user_id: float(s.amount_owed) for s in e.shares.all()}
         fallback_members = list(expense_shares.keys()) if expense_shares else list(members.keys())
         payer_id = e.created_by_id or (fallback_members[0] if fallback_members else None)
         
-        for it in items:
-            name = str(it.get('name') or 'Unknown').strip()
-            price = float(it.get('price') or 0.0)
-            qty = int(it.get('quantity') or 1)
-            
-            assigned_ids = resolve_assigned_ids(it, fallback_members, payer_id)
-            if not assigned_ids:
-                assigned_ids = fallback_members
+        if items:
+            for it in items:
+                name = str(it.get('name') or 'Unknown').strip()
+                price = float(it.get('price') or 0.0)
+                qty = int(it.get('quantity') or 1)
                 
-            cat = match_category(name)
-            pkw = match_product_keyword(name)
-            
-            if target_uid is None:
-                # Total Group spend on this item
-                total_spend += price
-                total_items += 1
-                orders_counted.add(e.id)
-                
-                cat_data[cat]['spend'] += price
-                cat_data[cat]['quantity'] += qty
-                cat_data[cat]['item_count'] += 1
-                cat_data[cat]['products'][name] += qty
-                cat_data[cat]['top_by_spend'][name] += price
-                
-                prod_data[pkw]['spend'] += price
-                prod_data[pkw]['quantity'] += qty
-                prod_data[pkw]['item_count'] += 1
-                prod_data[pkw]['products'][name] += qty
-                prod_data[pkw]['top_by_spend'][name] += price
-            else:
-                # Split ON target user for this item (Consumer summary)
-                if target_uid in assigned_ids:
-                    user_share = price / len(assigned_ids)
-                    user_qty = round(qty / len(assigned_ids), 2)
+                assigned_ids = resolve_assigned_ids(it, fallback_members, payer_id)
+                if not assigned_ids:
+                    assigned_ids = fallback_members
                     
-                    total_spend += user_share
+                cat = match_category(name)
+                pkw = match_product_keyword(name)
+                
+                if target_uid is None:
+                    # Total Group spend on this item
+                    itemized_spend += price
+                    total_spend += price
                     total_items += 1
-                    orders_counted.add(e.id)
+                    itemized_orders_counted.add(e.id)
                     
-                    cat_data[cat]['spend'] += user_share
-                    cat_data[cat]['quantity'] += user_qty
+                    cat_data[cat]['spend'] += price
+                    cat_data[cat]['quantity'] += qty
                     cat_data[cat]['item_count'] += 1
-                    cat_data[cat]['products'][name] += user_qty
-                    cat_data[cat]['top_by_spend'][name] += user_share
+                    cat_data[cat]['products'][name] += qty
+                    cat_data[cat]['top_by_spend'][name] += price
                     
-                    prod_data[pkw]['spend'] += user_share
-                    prod_data[pkw]['quantity'] += user_qty
+                    prod_data[pkw]['spend'] += price
+                    prod_data[pkw]['quantity'] += qty
                     prod_data[pkw]['item_count'] += 1
-                    prod_data[pkw]['products'][name] += user_qty
-                    prod_data[pkw]['top_by_spend'][name] += user_share
+                    prod_data[pkw]['products'][name] += qty
+                    prod_data[pkw]['top_by_spend'][name] += price
+                else:
+                    # Split ON target user for this item (Consumer summary)
+                    if target_uid in assigned_ids:
+                        user_share = price / len(assigned_ids)
+                        user_qty = round(qty / len(assigned_ids), 2)
+                        
+                        itemized_spend += user_share
+                        total_spend += user_share
+                        total_items += 1
+                        itemized_orders_counted.add(e.id)
+                        
+                        cat_data[cat]['spend'] += user_share
+                        cat_data[cat]['quantity'] += user_qty
+                        cat_data[cat]['item_count'] += 1
+                        cat_data[cat]['products'][name] += user_qty
+                        cat_data[cat]['top_by_spend'][name] += user_share
+                        
+                        prod_data[pkw]['spend'] += user_share
+                        prod_data[pkw]['quantity'] += user_qty
+                        prod_data[pkw]['item_count'] += 1
+                        prod_data[pkw]['products'][name] += user_qty
+                        prod_data[pkw]['top_by_spend'][name] += user_share
+        else:
+            # Non-itemized expense (e.g. Equal, Exact, Percentage, or general bill)
+            if target_uid is None:
+                exp_spend = float(e.amount)
+            else:
+                exp_spend = expense_shares.get(target_uid, 0.0)
+                
+            if exp_spend > 0 or target_uid is None:
+                non_itemized_spend += exp_spend
+                total_spend += exp_spend
+                total_items += 1
+                non_itemized_orders_counted.add(e.id)
+                
+                entry_label = 'Non-Itemized Spends'
+                desc = (e.description or '').strip() or 'General Expense'
+                
+                cat_data[entry_label]['spend'] += exp_spend
+                cat_data[entry_label]['quantity'] += 1
+                cat_data[entry_label]['item_count'] += 1
+                cat_data[entry_label]['products'][desc] += 1
+                cat_data[entry_label]['top_by_spend'][desc] += exp_spend
+                
+                prod_data[entry_label]['spend'] += exp_spend
+                prod_data[entry_label]['quantity'] += 1
+                prod_data[entry_label]['item_count'] += 1
+                prod_data[entry_label]['products'][desc] += 1
+                prod_data[entry_label]['top_by_spend'][desc] += exp_spend
 
     # Format Category Results
     categories = []
     for cat_name, data in sorted(cat_data.items(), key=lambda kv: kv[1]['spend'], reverse=True):
         top_items = [
             {"name": p_name, "quantity": data['products'][p_name], "spend": round(spend_amt, 2)}
-            for p_name, spend_amt in sorted(data['top_by_spend'].items(), key=lambda x: -x[1])[:3]
+            for p_name, spend_amt in sorted(data['top_by_spend'].items(), key=lambda x: -x[1])[:5]
         ]
         spend_val = round(data['spend'], 2)
         pct = round((spend_val / total_spend * 100), 1) if total_spend > 0 else 0.0
@@ -231,7 +256,7 @@ def build_grocery_summary(group=None, user_id=None, month=None):
     for kw_name, data in sorted(prod_data.items(), key=lambda kv: kv[1]['spend'], reverse=True):
         top_items = [
             {"name": p_name, "quantity": data['products'][p_name], "spend": round(spend_amt, 2)}
-            for p_name, spend_amt in sorted(data['top_by_spend'].items(), key=lambda x: -x[1])[:3]
+            for p_name, spend_amt in sorted(data['top_by_spend'].items(), key=lambda x: -x[1])[:5]
         ]
         spend_val = round(data['spend'], 2)
         pct = round((spend_val / total_spend * 100), 1) if total_spend > 0 else 0.0
@@ -244,9 +269,14 @@ def build_grocery_summary(group=None, user_id=None, month=None):
             "top_items": top_items
         })
 
+    all_orders_counted = itemized_orders_counted | non_itemized_orders_counted
     return {
         "total_spend": round(total_spend, 2),
-        "total_orders": len(orders_counted),
+        "itemized_spend": round(itemized_spend, 2),
+        "non_itemized_spend": round(non_itemized_spend, 2),
+        "total_orders": len(all_orders_counted),
+        "itemized_orders": len(itemized_orders_counted),
+        "non_itemized_orders": len(non_itemized_orders_counted),
         "total_items": total_items,
         "filter_type": "user_split" if target_uid else "group_total",
         "active_user": {
