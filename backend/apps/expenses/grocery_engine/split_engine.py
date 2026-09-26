@@ -54,6 +54,7 @@ FOOD_KEYWORD_RULES = [
     (r'\bsalt\b', 'Salt'),
     (r'\b(atta|flour|maida|besan)\b', 'Atta'),
     (r'\b(masala|spices?|turmeric|pepper|jeera|cumin)\b', 'Spices'),
+    (r'\b(oregano|seasoning|herbs?|chilli flakes)\b', 'Seasoning'),
     (r'\bpaneer\b', 'Paneer'),
     (r'\bcheese\b', 'Cheese'),
     (r'\bbuttermilk\b', 'Buttermilk'),
@@ -93,7 +94,7 @@ def extract_top_product_keyword(product_name: str) -> str:
     filtered = [w for w in words if w.lower() not in ignore_words and len(w) > 1]
     return ' '.join(filtered[:2]).title() if filtered else 'Groceries'
 
-def derive_order_title(platform_name: str, items: Optional[List[Dict[str, Any]]], order_id: Optional[str] = None) -> str:
+def derive_order_title(platform_name: str, items: Optional[List[Dict[str, Any]]], order_id: Optional[str] = None, max_keywords: int = 2) -> str:
     plat_low = (platform_name or '').lower()
     if 'swiggy' in plat_low:
         prefix = 'Swiggy'
@@ -104,12 +105,17 @@ def derive_order_title(platform_name: str, items: Optional[List[Dict[str, Any]]]
 
     if items:
         sorted_items = sorted(items, key=lambda x: float(x.get('price', 0) or 0), reverse=True)
+        unique_kws = []
         for it in sorted_items:
             name = it.get('name')
             if name:
                 kw = extract_top_product_keyword(name)
-                if kw:
-                    return f"{prefix}: {kw}"
+                if kw and kw not in unique_kws:
+                    unique_kws.append(kw)
+            if len(unique_kws) >= max_keywords:
+                break
+        if unique_kws:
+            return f"{prefix}: {', '.join(unique_kws)}"
 
     if order_id:
         return f"{prefix}: Order #{order_id}"

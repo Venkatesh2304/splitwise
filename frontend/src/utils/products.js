@@ -246,6 +246,7 @@ export const FOOD_KEYWORD_RULES = [
   [/\bsalt\b/i, 'Salt'],
   [/\b(atta|flour|maida|besan)\b/i, 'Atta'],
   [/\b(masala|spices?|turmeric|pepper|jeera|cumin)\b/i, 'Spices'],
+  [/\b(oregano|seasoning|herbs?|chilli flakes)\b/i, 'Seasoning'],
   [/\bpaneer\b/i, 'Paneer'],
   [/\bcheese\b/i, 'Cheese'],
   [/\bbuttermilk\b/i, 'Buttermilk'],
@@ -291,17 +292,24 @@ export function extractTopProductKeyword(productName) {
   return 'Groceries';
 }
 
-export function deriveOrderTitle(platformName, items, orderId) {
+export function deriveOrderTitle(platformName, items, orderId, maxKeywords = 2) {
   const plat = (platformName || '').toLowerCase();
   const prefix = plat.includes('swiggy') ? 'Swiggy' : (plat.includes('blinkit') ? 'Blinkit' : (platformName || 'Order'));
 
   if (Array.isArray(items) && items.length > 0) {
     const sorted = [...items].sort((a, b) => (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0));
+    const uniqueKws = [];
     for (const it of sorted) {
       if (it && it.name) {
         const kw = extractTopProductKeyword(it.name);
-        if (kw) return `${prefix}: ${kw}`;
+        if (kw && !uniqueKws.includes(kw)) {
+          uniqueKws.push(kw);
+        }
       }
+      if (uniqueKws.length >= maxKeywords) break;
+    }
+    if (uniqueKws.length > 0) {
+      return `${prefix}: ${uniqueKws.join(', ')}`;
     }
   }
 
