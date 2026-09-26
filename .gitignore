@@ -41,3 +41,10 @@ blinkit_mcp/
 .env
 .env.local
 .env.production
+
+# Web push private key (created on the server by manage.py ensure_vapid_keys)
+backend/push_keys/
+
+# App icons are PNGs; *.png above would otherwise keep them out of the deploy
+!frontend/public/icons/*.png
+!frontend/dist/icons/*.png

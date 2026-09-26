@@ -58,6 +58,12 @@ class UserProfileViewSet(viewsets.ModelViewSet):
         
         return super().list(request, *args, **kwargs)
 
+    @action(detail=True, methods=['get'])
+    def upi(self, request, pk=None):
+        """The UPI id to pay this person, fetched only when a payment is being made."""
+        user = self.get_object()
+        return Response({'upi_id': user.upi_id, 'name': user.name})
+
     @action(detail=False, methods=['post'])
     def login(self, request):
         username = request.data.get('username', '').strip().lower()

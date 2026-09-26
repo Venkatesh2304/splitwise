@@ -1,9 +1,14 @@
+import re
+
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Group, GroupMember
 from .serializers import GroupSerializer
 from apps.users.models import UserProfile
+from apps.notifications import activity
+from apps.notifications.events import resolve_actor
 from domain.balance_engine import calculate_group_balances
 from domain.debt_simplifier import simplify_debts
 
@@ -35,7 +40,14 @@ class GroupViewSet(viewsets.ModelViewSet):
             for u in users:
                 GroupMember.objects.create(group=groceries_group, user=u)
 
-        return super().list(request, *args, **kwargs)
+        response = super().list(request, *args, **kwargs)
+
+        # ?user_id= asks "how much has this person not seen in each group?"
+        viewer = resolve_actor(request.query_params.get('user_id'))
+        if viewer:
+            for group in response.data:
+                group['unseen_count'] = activity.unseen_count(group['id'], viewer.id)
+        return response
 
     def retrieve(self, request, *args, **kwargs):
         group = self.get_object()
@@ -75,7 +87,41 @@ class GroupViewSet(viewsets.ModelViewSet):
         data["expenses"] = ExpenseSerializer(expenses, many=True).data
         data["settlements"] = SettlementSerializer(settlements, many=True).data
 
+        viewer = resolve_actor(request.query_params.get('user_id'))
+        if viewer:
+            baseline = activity.baseline_for(group.id, viewer.id)
+            data["last_seen_at"] = baseline
+            data["activity"] = activity.serialize(activity.for_user(group.id, viewer.id), viewer.id)
+            data["unseen_count"] = activity.unseen_count(group.id, viewer.id)
+
         return Response(data)
+
+    @action(detail=True, methods=['get'])
+    def summary(self, request, pk=None):
+        """What the group spent in a month, and what of it was yours."""
+        from apps.expenses import summary as summary_builder
+
+        group = self.get_object()
+        months = summary_builder.months_with_expenses(group)
+        month = request.query_params.get('month') or (months[0] if months else timezone.now().strftime('%Y-%m'))
+        if not re.match(r'^\d{4}-\d{2}$', month):
+            return Response({'error': 'month must look like 2026-09'}, status=status.HTTP_400_BAD_REQUEST)
+
+        viewer = resolve_actor(request.query_params.get('user_id'))
+        return Response(summary_builder.build(group, month, viewer.id if viewer else None))
+
+    @action(detail=True, methods=['post'])
+    def seen(self, request, pk=None):
+        """Mark this group as looked at. Returns the previous mark so the page can keep
+        highlighting what was new for the rest of the visit."""
+        group = self.get_object()
+        viewer = resolve_actor(request.data.get('user_id'))
+        if not viewer:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        previous = activity.mark_seen(group.id, viewer.id)
+        if previous is None:
+            return Response({'error': 'That user is not in this group'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'previous_seen_at': previous, 'unseen_count': 0})
 
     @action(detail=True, methods=['post'])
     def add_member(self, request, pk=None):

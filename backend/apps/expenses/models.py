@@ -22,6 +22,8 @@ class Expense(models.Model):
     notes = models.TextField(blank=True, default='')
     date = models.DateField(default=datetime.date.today)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(null=True, blank=True)
+    updated_by = models.ForeignKey(UserProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_expenses')
 
     def __str__(self):
         return f"{self.description} (${self.amount})"
@@ -56,6 +58,7 @@ class Settlement(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     date = models.DateField(default=datetime.date.today)
     notes = models.TextField(blank=True, default='')
+    created_by = models.ForeignKey(UserProfile, on_delete=models.SET_NULL, null=True, blank=True, related_name='recorded_settlements')
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

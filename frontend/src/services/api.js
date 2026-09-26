@@ -56,20 +56,59 @@ export const api = {
   // Users
   getUsers: () => request('/users/'),
   createUser: (userData) => request('/users/', { method: 'POST', body: userData }),
+  updateUser: (id, userData) => request(`/users/${id}/`, { method: 'PATCH', body: userData }),
+  // Fetched only when a payment is about to be made, not with every user list
+  getUpiId: (id) => request(`/users/${id}/upi/`),
 
-  // Groups
-  getGroups: () => request('/groups/'),
-  getGroupDetail: (id) => request(`/groups/${id}/`),
+  // Groups (userId brings back what that person hasn't seen yet)
+  getGroups: (userId) => request(`/groups/${forUser(userId)}`),
+  getGroupDetail: (id, userId) => request(`/groups/${id}/${forUser(userId)}`),
+  markGroupSeen: (groupId, userId) => request(`/groups/${groupId}/seen/`, {
+    method: 'POST',
+    body: { user_id: userId }
+  }),
+  getGroupSummary: (groupId, month, userId) => {
+    const params = new URLSearchParams();
+    if (month) params.set('month', month);
+    if (userId) params.set('user_id', userId);
+    const query = params.toString();
+    return request(`/groups/${groupId}/summary/${query ? `?${query}` : ''}`);
+  },
   createGroup: (groupData) => request('/groups/', { method: 'POST', body: groupData }),
   addGroupMember: (groupId, userId) => request(`/groups/${groupId}/add_member/`, {
     method: 'POST',
     body: { user_id: userId }
   }),
 
-  // Expenses
+  // Expenses (actor_id = who is making the change; they aren't notified about it)
   createExpense: (expenseData) => request('/expenses/', { method: 'POST', body: expenseData }),
-  deleteExpense: (id) => request(`/expenses/${id}/`, { method: 'DELETE' }),
+  updateExpense: (id, expenseData) => request(`/expenses/${id}/`, { method: 'PUT', body: expenseData }),
+  deleteExpense: (id, actorId) => request(`/expenses/${id}/${withActor(actorId)}`, { method: 'DELETE' }),
 
   // Settlements
   createSettlement: (settlementData) => request('/settlements/', { method: 'POST', body: settlementData }),
+  deleteSettlement: (id, actorId) => request(`/settlements/${id}/${withActor(actorId)}`, { method: 'DELETE' }),
+
+  // Push notifications
+  getPushPublicKey: () => request('/push/public_key/'),
+  pushSubscribe: (userId, subscription) => request('/push/subscribe/', {
+    method: 'POST',
+    body: { user_id: userId, subscription }
+  }),
+  pushUnsubscribe: (endpoint) => request('/push/unsubscribe/', { method: 'POST', body: { endpoint } }),
+  pushTest: (userId) => request('/push/test/', { method: 'POST', body: { user_id: userId } }),
+
+  // Ask someone to settle up (they get a notification)
+  nudge: ({ actorId, userId, groupId, amount }) => request('/nudge/', {
+    method: 'POST',
+    body: { actor_id: actorId, user_id: userId, group_id: groupId, amount }
+  }),
 };
+
+function withActor(actorId) {
+  return actorId ? `?actor_id=${encodeURIComponent(actorId)}` : '';
+}
+
+function forUser(userId) {
+  return userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+}

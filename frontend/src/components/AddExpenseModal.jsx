@@ -2,8 +2,31 @@ import React, { useState, useEffect } from 'react';
 import { useUser } from '../context/UserContext';
 import { api } from '../services/api';
 import { X, Receipt, Calculator, Check, AlertCircle } from 'lucide-react';
+import ItemsEditor, { blankItem } from './ItemsEditor';
 
-export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, onExpenseAdded }) {
+const EDITABLE_SPLIT_TYPES = ['EQUAL', 'EXACT', 'PERCENTAGE', 'ITEMS'];
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+// The items stored on an expense, if it was split that way (and isn't a grocery order,
+// which is re-split from its own screen)
+function storedItems(expense) {
+  try {
+    const notes = JSON.parse(expense.notes || '');
+    if (!notes || notes.platform || !Array.isArray(notes.items)) return null;
+    return notes.items.map((item, index) => ({
+      key: `stored-${index}`,
+      name: item.name || '',
+      price: String(item.price ?? ''),
+      assigned: item.assigned_member_ids || [],
+    }));
+  } catch {
+    return null;
+  }
+}
+const userIdOf = (row) => (row.user && row.user.id) ?? row.user_id;
+
+// editingExpense: an existing manual expense to edit (null = add a new one)
+export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, onExpenseAdded, editingExpense = null }) {
   const { activeUser } = useUser();
 
   const [selectedGroupId, setSelectedGroupId] = useState('');
@@ -17,6 +40,11 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
   // Custom split values: { [userId]: amountOrPercentage }
   const [customValues, setCustomValues] = useState({});
   const [selectedSplitMemberIds, setSelectedSplitMemberIds] = useState([]);
+  const [items, setItems] = useState([]);
+  const [charges, setCharges] = useState('');
+  // Several people can pay for one expense; the list stays hidden until it's needed
+  const [manyPayers, setManyPayers] = useState(false);
+  const [payerAmounts, setPayerAmounts] = useState({});   // userId -> typed amount
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -25,14 +53,17 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
   const groupMembers = currentGroup ? currentGroup.members || [] : [];
 
   useEffect(() => {
-    if (activeGroup) {
+    if (editingExpense) {
+      setSelectedGroupId(String(editingExpense.group_id));
+    } else if (activeGroup) {
       setSelectedGroupId(String(activeGroup.id));
     } else if (groups.length > 0 && !selectedGroupId) {
       setSelectedGroupId(String(groups[0].id));
     }
-  }, [activeGroup, groups]);
+  }, [activeGroup, groups, editingExpense]);
 
   useEffect(() => {
+    if (editingExpense) return; // filled from the expense instead (below)
     if (groupMembers.length > 0) {
       const allIds = groupMembers.map(m => m.id);
       setSelectedSplitMemberIds(allIds);
@@ -52,15 +83,105 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       });
       setCustomValues(initialCustom);
     }
-  }, [selectedGroupId, currentGroup]);
+  }, [selectedGroupId, currentGroup, editingExpense]);
+
+  // Opening the list starts from whoever the dropdown had, with the whole amount on them
+  useEffect(() => {
+    if (!manyPayers) return;
+    setPayerAmounts(current => (
+      Object.keys(current).length > 0
+        ? current
+        : (paidById ? { [paidById]: totalAmountNum > 0 ? String(totalAmountNum) : '' } : {})
+    ));
+  }, [manyPayers]);
+
+  // Each time the modal opens: a blank form to add, or the expense's values to edit
+  useEffect(() => {
+    if (!isOpen) return;
+    setError(null);
+    if (!editingExpense) {
+      setDescription('');
+      setAmount('');
+      setCategory('FOOD');
+      setDate(new Date().toISOString().split('T')[0]);
+      setSplitType('EQUAL');
+      setItems([]);
+      setCharges('');
+      setManyPayers(false);
+      setPayerAmounts({});
+      return;
+    }
+
+    const shares = editingExpense.shares || [];
+    const payers = editingExpense.payers || [];
+    const type = EDITABLE_SPLIT_TYPES.includes(editingExpense.split_type) ? editingExpense.split_type : 'EXACT';
+    const memberIds = shares.map(userIdOf);
+
+    setDescription(editingExpense.description || '');
+    setAmount(String(parseFloat(editingExpense.amount)));
+    setCategory(editingExpense.category || 'OTHER');
+    setDate(editingExpense.date || new Date().toISOString().split('T')[0]);
+    // More than one payer would otherwise collapse into the first one and be lost on save
+    setManyPayers(payers.length > 1);
+    setPayerAmounts(Object.fromEntries(payers.map(p => [userIdOf(p), String(parseFloat(p.amount_paid))])));
+    setPaidById(payers.length > 0 ? String(userIdOf(payers[0])) : '');
+    setSplitType(type);
+    setSelectedSplitMemberIds(memberIds);
+
+    const saved = type === 'ITEMS' ? storedItems(editingExpense) : null;
+    setItems(saved || []);
+    setCharges(saved
+      ? String(round2(parseFloat(editingExpense.amount) - saved.reduce((sum, i) => sum + (parseFloat(i.price) || 0), 0)) || '')
+      : '');
+
+    const custom = {};
+    shares.forEach(sh => {
+      const uid = userIdOf(sh);
+      if (type === 'EXACT') custom[uid] = String(parseFloat(sh.amount_owed));
+      else if (type === 'PERCENTAGE') custom[uid] = String(sh.percentage);
+      else custom[uid] = memberIds.length ? (100 / memberIds.length).toFixed(2) : '';
+    });
+    setCustomValues(custom);
+  }, [isOpen, editingExpense]);
 
   if (!isOpen) return null;
 
-  const totalAmountNum = parseFloat(amount) || 0;
+  const currencySymbol = currentGroup ? currentGroup.currency : '₹';
+  const isItems = splitType === 'ITEMS';
+  const itemsTotal = items.reduce((sum, item) => sum + (parseFloat(item.price) || 0), 0);
+  const totalAmountNum = isItems ? round2(itemsTotal + (parseFloat(charges) || 0)) : (parseFloat(amount) || 0);
+  const unassignedItems = items.filter(item => item.assigned.length === 0).length;
+
+  const payerEntries = Object.entries(payerAmounts)
+    .map(([uid, value]) => ({ userId: parseInt(uid, 10), amount: parseFloat(value) || 0 }))
+    .filter(entry => entry.amount > 0);
+  const paidSoFar = round2(payerEntries.reduce((sum, entry) => sum + entry.amount, 0));
+  const missingFromPayers = round2(totalAmountNum - paidSoFar);
+  // Whoever put in the most: the rounding lands on them, server-side too
+  const primaryPayerId = manyPayers && payerEntries.length > 0
+    ? payerEntries.reduce((top, entry) => (entry.amount > top.amount ? entry : top)).userId
+    : parseInt(paidById, 10);
+
+  let payerValidationMsg = null;
+  if (manyPayers) {
+    if (payerEntries.length === 0) {
+      payerValidationMsg = 'Type what each person paid.';
+    } else if (Math.abs(missingFromPayers) > 0.01 && totalAmountNum > 0) {
+      payerValidationMsg = missingFromPayers > 0
+        ? `${currencySymbol}${missingFromPayers.toFixed(2)} of ${currencySymbol}${totalAmountNum.toFixed(2)} still unaccounted for.`
+        : `${currencySymbol}${Math.abs(missingFromPayers).toFixed(2)} more than the expense total.`;
+    }
+  }
 
   // Custom split validation status
   let splitValidationMsg = null;
-  if (splitType === 'EXACT') {
+  if (isItems) {
+    if (items.length === 0) {
+      splitValidationMsg = 'Add at least one item.';
+    } else if (unassignedItems > 0) {
+      splitValidationMsg = `${unassignedItems} item${unassignedItems > 1 ? 's have' : ' has'} nobody on it — tap the people who had it.`;
+    }
+  } else if (splitType === 'EXACT') {
     const exactSum = selectedSplitMemberIds.reduce((sum, id) => sum + (parseFloat(customValues[id]) || 0), 0);
     const diff = Math.abs(exactSum - totalAmountNum);
     if (diff > 0.01 && totalAmountNum > 0) {
@@ -96,8 +217,9 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setError('Description is required.');
       return;
     }
-    if (!amount || totalAmountNum <= 0) {
-      setError('Expense amount must be greater than 0.');
+    // In items mode the amount isn't typed, it adds up from the items and charges
+    if (totalAmountNum <= 0) {
+      setError(isItems ? 'Add at least one item with a price.' : 'Expense amount must be greater than 0.');
       return;
     }
     if (!currentGroup) {
@@ -108,14 +230,15 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setError(splitValidationMsg);
       return;
     }
+    if (payerValidationMsg) {
+      setError(payerValidationMsg);
+      return;
+    }
 
     // Build payload
-    const payers = [
-      {
-        user_id: parseInt(paidById),
-        amount_paid: totalAmountNum
-      }
-    ];
+    const payers = manyPayers
+      ? payerEntries.map(entry => ({ user_id: entry.userId, amount_paid: entry.amount }))
+      : [{ user_id: parseInt(paidById), amount_paid: totalAmountNum }];
 
     const shares = selectedSplitMemberIds.map(uid => {
       const item = { user_id: uid };
@@ -131,22 +254,38 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setSubmitting(true);
       setError(null);
 
-      await api.createExpense({
+      const expenseData = {
         group_id: currentGroup.id,
         description: description.trim(),
         amount: totalAmountNum,
         category,
         split_type: splitType,
-        created_by_id: activeUser ? activeUser.id : parseInt(paidById),
         date,
         payers,
-        shares
-      });
+        shares: isItems ? [] : shares,
+        actor_id: activeUser ? activeUser.id : undefined
+      };
+      if (isItems) {
+        expenseData.items = items.map(item => ({
+          name: item.name.trim() || 'Item',
+          price: parseFloat(item.price) || 0,
+          assigned_member_ids: item.assigned,
+        }));
+      }
+
+      if (editingExpense) {
+        await api.updateExpense(editingExpense.id, expenseData);
+      } else {
+        await api.createExpense({
+          ...expenseData,
+          created_by_id: activeUser ? activeUser.id : parseInt(paidById)
+        });
+      }
 
       onExpenseAdded();
       onClose();
     } catch (err) {
-      setError(err.message || 'Failed to create expense.');
+      setError(err.message || (editingExpense ? 'Failed to save changes.' : 'Failed to create expense.'));
     } finally {
       setSubmitting(false);
     }
@@ -158,7 +297,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
         <div className="modal-header">
           <h3 style={{ fontSize: '1.2rem', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Receipt size={20} color="var(--accent-primary)" />
-            <span>Add Group Expense</span>
+            <span>{editingExpense ? 'Edit Expense' : 'Add Group Expense'}</span>
           </h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
             <X size={20} />
@@ -188,6 +327,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 className="form-select"
                 value={selectedGroupId}
                 onChange={(e) => setSelectedGroupId(e.target.value)}
+                disabled={Boolean(editingExpense)}
               >
                 {groups.map(g => (
                   <option key={g.id} value={g.id}>
@@ -207,7 +347,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                   placeholder="e.g. Dinner, Uber ride, Grocery bill"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  autoFocus
+                  autoFocus={!editingExpense}
                 />
               </div>
 
@@ -219,8 +359,11 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                   min="0.01"
                   className="form-input"
                   placeholder="0.00"
-                  value={amount}
+                  value={isItems ? (totalAmountNum || '') : amount}
                   onChange={(e) => setAmount(e.target.value)}
+                  readOnly={isItems}
+                  title={isItems ? 'Adds up from the items and charges below' : undefined}
+                  style={isItems ? { opacity: 0.7, cursor: 'not-allowed' } : undefined}
                 />
               </div>
             </div>
@@ -251,15 +394,109 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
 
               <div className="form-group">
                 <label className="form-label">Paid By</label>
-                <select className="form-select" value={paidById} onChange={(e) => setPaidById(e.target.value)}>
-                  {groupMembers.map(m => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
+                {manyPayers ? (
+                  <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)', padding: '0.5rem 0' }}>
+                    {payerEntries.length || 'No'} {payerEntries.length === 1 ? 'person' : 'people'} below
+                  </div>
+                ) : (
+                  <select className="form-select" value={paidById} onChange={(e) => setPaidById(e.target.value)}>
+                    {groupMembers.map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setManyPayers(!manyPayers);
+                    if (manyPayers) setPayerAmounts({});
+                  }}
+                  style={{
+                    background: 'none', border: 'none', padding: '0.25rem 0 0', cursor: 'pointer',
+                    color: 'var(--accent-primary)', fontSize: '0.75rem', fontWeight: 600, textAlign: 'left'
+                  }}
+                >
+                  {manyPayers ? 'One person paid' : 'Split the payment'}
+                </button>
               </div>
             </div>
+
+            {manyPayers && (
+              <div style={{
+                marginTop: '0.25rem',
+                padding: '0.7rem 0.85rem',
+                backgroundColor: 'rgba(15, 23, 42, 0.5)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', gap: '0.5rem' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                    Who paid, and how much
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      const chosen = Object.keys(payerAmounts);
+                      const ids = chosen.length > 0 ? chosen : groupMembers.map(m => String(m.id));
+                      const each = round2(totalAmountNum / ids.length);
+                      const amounts = {};
+                      ids.forEach((id, index) => {
+                        // The first one absorbs the rounding so the parts add up exactly
+                        amounts[id] = String(index === 0 ? round2(totalAmountNum - each * (ids.length - 1)) : each);
+                      });
+                      setPayerAmounts(amounts);
+                    }}
+                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                    disabled={totalAmountNum <= 0}
+                  >
+                    Divide evenly
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                  {groupMembers.map(m => {
+                    const ticked = String(m.id) in payerAmounts;
+                    return (
+                      <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={ticked}
+                          onChange={() => {
+                            const next = { ...payerAmounts };
+                            if (ticked) delete next[m.id];
+                            else next[m.id] = '';
+                            setPayerAmounts(next);
+                          }}
+                          style={{ accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                        />
+                        <span style={{ fontSize: '0.85rem', color: '#ffffff', flex: 1, opacity: ticked ? 1 : 0.5 }}>
+                          {m.name}
+                        </span>
+                        {ticked && (
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="form-input"
+                            placeholder="0.00"
+                            value={payerAmounts[m.id]}
+                            onChange={(e) => setPayerAmounts({ ...payerAmounts, [m.id]: e.target.value })}
+                            style={{ width: '110px', padding: '0.3rem 0.5rem', fontSize: '0.825rem' }}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ marginTop: '0.5rem', fontSize: '0.775rem', color: payerValidationMsg ? 'var(--color-negative)' : 'var(--text-muted)' }}>
+                  {payerValidationMsg || `${currencySymbol}${paidSoFar.toFixed(2)} of ${currencySymbol}${totalAmountNum.toFixed(2)} accounted for.`}
+                </div>
+              </div>
+            )}
 
             {/* Split Mode Selector */}
             <div style={{ marginTop: '1rem', marginBottom: '0.85rem' }}>
@@ -286,10 +523,40 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 >
                   By Percentages (%)
                 </button>
+                <button
+                  type="button"
+                  className={`tab-btn ${splitType === 'ITEMS' ? 'active' : ''}`}
+                  onClick={() => {
+                    setSplitType('ITEMS');
+                    if (items.length === 0) setItems([blankItem(groupMembers.map(m => m.id))]);
+                  }}
+                >
+                  By items
+                </button>
               </div>
             </div>
 
-            {/* Split Participants Breakdown List */}
+            {/* Items, when the bill is split line by line */}
+            {isItems ? (
+              <div>
+                {splitValidationMsg && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--color-negative)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <AlertCircle size={14} />
+                    <span>{splitValidationMsg}</span>
+                  </div>
+                )}
+                <ItemsEditor
+                  members={groupMembers}
+                  items={items}
+                  onItemsChange={setItems}
+                  charges={charges}
+                  onChargesChange={setCharges}
+                  currency={currentGroup ? currentGroup.currency : '₹'}
+                  payerId={primaryPayerId}
+                />
+              </div>
+            ) : (
+            /* Split Participants Breakdown List */
             <div style={{
               backgroundColor: 'rgba(15, 23, 42, 0.5)',
               border: '1px solid var(--border-color)',
@@ -380,6 +647,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 );
               })}
             </div>
+            )}
           </div>
 
           <div className="modal-footer">
@@ -387,7 +655,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting ? 'Saving...' : 'Save Expense'}
+              {submitting ? 'Saving...' : (editingExpense ? 'Save Changes' : 'Save Expense')}
             </button>
           </div>
         </form>
