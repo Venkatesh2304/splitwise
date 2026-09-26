@@ -104,3 +104,48 @@ class GrocerySummaryTestCase(TestCase):
         data_filtered = res_filtered.json()
         self.assertEqual(data_filtered["filter_type"], "user_split")
         self.assertEqual(data_filtered["total_spend"], 1245.5)
+
+    def test_manual_itemized_split_included_in_summary(self):
+        exp_manual = Expense.objects.create(
+            group=self.group,
+            description="Italian Restaurant Bill",
+            amount=500.0,
+            split_type="ITEMS",
+            created_by=self.user1,
+            notes=json.dumps({
+                "split_mode": "ITEMIZED",
+                "items": [
+                    {
+                        "name": "Margherita Pizza",
+                        "price": 300.0,
+                        "split_type": "SPECIFIC",
+                        "assigned_member_ids": [self.user1.id]
+                    },
+                    {
+                        "name": "Veg Burger",
+                        "price": 200.0,
+                        "split_type": "ALL",
+                        "assigned_member_ids": [self.user1.id, self.user2.id]
+                    }
+                ]
+            })
+        )
+        ExpensePayer.objects.create(expense=exp_manual, user=self.user1, amount_paid=500.0)
+        ExpenseShare.objects.create(expense=exp_manual, user=self.user1, amount_owed=400.0)
+        ExpenseShare.objects.create(expense=exp_manual, user=self.user2, amount_owed=100.0)
+
+        try:
+            summary = build_grocery_summary(group=self.group)
+            self.assertEqual(summary["total_orders"], 2)
+            self.assertEqual(summary["total_spend"], 1991.0)
+
+            summary_akash = build_grocery_summary(group=self.group, user_id=self.user1.id)
+            self.assertEqual(summary_akash["total_spend"], 1645.5)
+
+            summary_rahul = build_grocery_summary(group=self.group, user_id=self.user2.id)
+            self.assertEqual(summary_rahul["total_spend"], 345.5)
+
+            dining_cat = next(c for c in summary["categories"] if c["name"] == "Dining, Meals & Fast Food")
+            self.assertEqual(dining_cat["spend"], 500.0)
+        finally:
+            exp_manual.delete()

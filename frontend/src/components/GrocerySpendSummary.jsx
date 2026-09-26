@@ -70,13 +70,13 @@ export default function GrocerySpendSummary({ groupId, initialGroceryData, curre
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
             <ShoppingBag size={17} style={{ color: 'var(--accent-primary)' }} />
             <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#ffffff', letterSpacing: '-0.01em' }}>
-              Quick Commerce Spends
+              Itemized & Grocery Spends
             </span>
           </div>
           <p style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
             {filterUser === 'all'
-              ? 'Itemized group grocery spends categorized by deterministic keywords'
-              : `Exact grocery item splits assigned to ${groceryData?.active_user?.name || 'this user'}`}
+              ? 'Itemized group spending categorized by deterministic keywords'
+              : `Exact item splits assigned to ${groceryData?.active_user?.name || 'this user'}`}
           </p>
         </div>
 
@@ -240,7 +240,7 @@ export default function GrocerySpendSummary({ groupId, initialGroceryData, curre
         </div>
       ) : rows.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
-          No grocery items recorded for this selection.
+          No itemized items recorded for this selection.
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>

@@ -2,7 +2,13 @@ import json
 import re
 from collections import defaultdict, Counter
 from datetime import datetime
-from apps.expenses.models import Expense, GroceryOrderRecord
+from apps.expenses.models import Expense
+from apps.expenses.itemized import (
+    assigned_ids as resolve_assigned_ids,
+    extract_expense_items,
+    get_expense_source_info,
+    ALL, PERSONAL, SPECIFIC
+)
 
 # Deterministic Product Keyword Rules: (Display Name, [keywords])
 DETERMINISTIC_PRODUCT_RULES = [
@@ -25,7 +31,8 @@ DETERMINISTIC_PRODUCT_RULES = [
     ('Granola & Cereals', ['granola', 'muesli', 'corn flakes', 'oats']),
     ('Chips & Crisps', ['bingo', "lay's", 'lays', 'chips', 'crisps', 'kurkure', 'nachos']),
     ('Biscuits, Cookies & Sweets', ['cookie', 'cookies', 'biscuit', 'biscuits', 'chocolate', 'chocolates', 'dark fantasy', 'oreo', 'kitkat', 'munch', 'wafer', 'candy', 'mithai']),
-    ('Beverages & Soft Drinks', ['coca-cola', 'coke', 'pepsi', 'juice', 'soda', 'coffee', 'tea', 'red bull', 'sugarcane', 'water', 'sprite', 'thums up', 'drink', 'beverage', 'enerzal', 'bournvita', 'horlicks', 'raw pressery']),
+    ('Beverages & Soft Drinks', ['coca-cola', 'coke', 'pepsi', 'juice', 'soda', 'coffee', 'tea', 'red bull', 'sugarcane', 'water', 'sprite', 'thums up', 'drink', 'beverage', 'enerzal', 'bournvita', 'horlicks', 'raw pressery', 'beer', 'cocktail', 'cocktails', 'wine']),
+    ('Dining & Fast Food', ['pizza', 'burger', 'sandwich', 'shawarma', 'roll', 'fries', 'french fries', 'momos', 'noodles', 'fried rice', 'thali', 'curry', 'roti', 'naan', 'tikka', 'kebab', 'starters']),
     ('Paneer, Cheese & Butter', ['paneer', 'cheese', 'butter', 'buttermilk']),
     ('Cleaning & Household', ['detergent', 'garbage bag', 'dishwash', 'vim', 'harpic', 'surf excel', 'cleaner', 'spray', 'scrub', 'sponge', 'laundry', 'pochha', 'cloth', 'lighter', 'clip', 'tissue', 'foil', 'freshener']),
     ('Personal Care & Grooming', ['shampoo', 'conditioner', 'soap', 'shower gel', 'body wash', 'bodywash', 'face wash', 'facewash', 'serum', 'lotion', 'cream', 'deodorant', 'perfume', 'toothbrush', 'toothpaste', 'colgate', 'tresemme', 'fiama', 'joy', 'sanitary', 'pad', 'handwash', 'dettol', 'lux', 'shaving', 'razor', 'dove', 'sample']),
@@ -37,10 +44,11 @@ DETERMINISTIC_PRODUCT_RULES = [
 DETERMINISTIC_CATEGORY_RULES = [
     ('Meat, Poultry & Eggs', ['chicken', 'meat', 'mutton', 'fish', 'prawn', 'licious', 'meatizon', 'freshtohome', 'sausage', 'egg', 'eggs']),
     ('Dairy, Breakfast & Batters', ['milk', 'curd', 'dahi', 'yogurt', 'butter', 'paneer', 'cheese', 'batter', 'idli', 'dosa', 'bread', 'pav', 'granola', 'oats', 'muesli', 'corn flakes', 'honey', 'jam', 'peanut butter', 'buttermilk', 'lassi']),
+    ('Dining, Meals & Fast Food', ['pizza', 'burger', 'sandwich', 'shawarma', 'roll', 'fries', 'french fries', 'momos', 'noodles', 'fried rice', 'thali', 'curry', 'roti', 'naan', 'tikka', 'kebab', 'starters', 'meal', 'restaurant']),
     ('Fresh Fruits & Vegetables', ['onion', 'potato', 'tomato', 'banana', 'apple', 'kela', 'pyaaz', 'aloo', 'lady finger', 'bhindi', 'ginger', 'garlic', 'carrot', 'beans', 'lemon', 'chilli', 'chili', 'coriander', 'cucumber', 'capsicum', 'palak', 'spinach', 'coconut', 'matar', 'peas', 'mushroom', 'beetroot', 'cauliflower', 'cabbage', 'sweet corn', 'mint', 'pomegranate', 'orange', 'watermelon', 'papaya', 'grapes', 'avocado']),
     ('Staples, Oils & Spices', ['oil', 'ghee', 'rice', 'atta', 'flour', 'dal', 'salt', 'sugar', 'masala', 'turmeric', 'pepper', 'jeera', 'biryani kit', 'paste', 'spices', 'cumin', 'mustard', 'sauce', 'ketchup', 'soya', 'noodle', 'maggi', 'pasta', 'poha', 'besan', 'maida', 'peanuts', 'kasuri methi']),
     ('Snacks, Biscuits & Sweets', ['bingo', "lay's", 'lays', 'chips', 'crisps', 'cookie', 'cookies', 'biscuit', 'biscuits', 'chocolate', 'chocolates', 'namkeen', 'kurkure', 'dark fantasy', 'oreo', 'kitkat', 'munch', 'snack', 'mixture', 'rusk', 'wafer', 'candy', 'mithai', 'murukku', 'popcorn', 'dessert', 'fudge', 'ice cream']),
-    ('Beverages & Drinks', ['coca-cola', 'coke', 'pepsi', 'juice', 'soda', 'coffee', 'tea', 'red bull', 'sugarcane', 'water', 'sprite', 'thums up', 'drink', 'beverage', 'enerzal', 'raw pressery', 'tender coconut']),
+    ('Beverages & Drinks', ['coca-cola', 'coke', 'pepsi', 'juice', 'soda', 'coffee', 'tea', 'red bull', 'sugarcane', 'water', 'sprite', 'thums up', 'drink', 'beverage', 'enerzal', 'raw pressery', 'tender coconut', 'beer', 'cocktail', 'cocktails', 'wine']),
     ('Household & Cleaning', ['detergent', 'garbage bag', 'dishwash', 'vim', 'harpic', 'surf excel', 'cleaner', 'spray', 'scrub', 'sponge', 'laundry', 'pochha', 'cloth', 'lighter', 'clip', 'tissue', 'foil', 'freshener']),
     ('Personal Care & Hygiene', ['shampoo', 'conditioner', 'soap', 'shower gel', 'body wash', 'bodywash', 'face wash', 'facewash', 'serum', 'lotion', 'cream', 'deodorant', 'perfume', 'toothbrush', 'toothpaste', 'colgate', 'tresemme', 'fiama', 'joy', 'sanitary', 'pad', 'handwash', 'dettol', 'lux', 'shaving', 'razor', 'dove', 'sample']),
     ('Electronics & Lifestyle', ['portronics', 'power cord', 'power plate', 'mobile cover', 'cable', 'charger', 'battery', 'clean m 8', 'shorts', 'trunks', 'sliders', 'lamp', 'creatine', 'dates', 'silver voucher'])
@@ -107,21 +115,7 @@ def build_grocery_summary(group=None, user_id=None, month=None):
     grocery_expenses_with_items = []
     
     for e in group_expenses:
-        items = []
-        if e.notes:
-            try:
-                nd = json.loads(e.notes)
-                items = nd.get('items', [])
-            except Exception:
-                pass
-                
-        if not items:
-            m = re.search(r'#(\d+)', e.description)
-            if m:
-                rec = GroceryOrderRecord.objects.filter(order_id=m.group(1)).first()
-                if rec and rec.item_details:
-                    items = rec.item_details
-                    
+        items = extract_expense_items(e)
         if items:
             m_str = e.date.strftime('%Y-%m')
             month_counts[m_str] += 1
@@ -161,13 +155,14 @@ def build_grocery_summary(group=None, user_id=None, month=None):
     for e, items in grocery_expenses_with_items:
         expense_shares = {s.user_id: float(s.amount_owed) for s in e.shares.all()}
         fallback_members = list(expense_shares.keys()) if expense_shares else list(members.keys())
+        payer_id = e.created_by_id or (fallback_members[0] if fallback_members else None)
         
         for it in items:
             name = str(it.get('name') or 'Unknown').strip()
             price = float(it.get('price') or 0.0)
             qty = int(it.get('quantity') or 1)
             
-            assigned_ids = it.get('assigned_member_ids') or fallback_members
+            assigned_ids = resolve_assigned_ids(it, fallback_members, payer_id)
             if not assigned_ids:
                 assigned_ids = fallback_members
                 
