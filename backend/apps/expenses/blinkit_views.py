@@ -136,9 +136,9 @@ def parse_blinkit_order_details_v2(details_data):
 
             price = 0.0
             if sub3:
-                prices = re.findall(r'₹\s*(\d+(?:\.\d+)?)', sub3)
+                prices = re.findall(r'₹\s*([0-9,]+(?:\.\d+)?)', sub3)
                 if prices:
-                    price = float(prices[-1])
+                    price = float(prices[-1].replace(',', ''))
 
             if p_name:
                 items.append({"name": p_name, "price": price, "quantity": qty})
