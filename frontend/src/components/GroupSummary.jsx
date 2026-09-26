@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/api';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import GrocerySpendSummary from './GrocerySpendSummary';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -159,6 +160,13 @@ export default function GroupSummary({ groupId, currentUserId, refreshToken }) {
               rows={data.categories.map(c => ({ key: c.category, label: c.label, value: c.total, note: `${c.percent}%` }))}
             />
           </div>
+
+          <GrocerySpendSummary
+            groupId={groupId}
+            initialGroceryData={data.grocery_summary}
+            currency={currency}
+            activeMonth={data.month}
+          />
 
           <div className="card" style={{ padding: '1rem' }}>
             <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block', marginBottom: '0.75rem' }}>

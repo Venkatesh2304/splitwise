@@ -3,6 +3,8 @@ import { api } from '../services/api';
 import { useUser } from '../context/UserContext';
 import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight, Sparkles } from 'lucide-react';
 import GroupSummary from './GroupSummary';
+import { canOpenUpiApp, upiPayLink } from '../utils/upi';
+import { getExpenseProducts } from '../utils/products';
 
 const CATEGORY_LABELS = {
   FOOD: '🍔 Food & Dining',
@@ -23,33 +25,35 @@ function involvesUser(item, userId) {
 }
 
 function matchesSearch(item, query, members) {
-  if (!query) return true;
+  if (!query || !query.trim()) return true;
+  const q = query.trim().toLowerCase();
+  const searchTerms = q.split(/\s+/).filter(Boolean);
+
   const haystack = [];
   if (item.kind === 'settlement') {
     haystack.push(item.payer?.name, item.payee?.name, item.notes, 'settle up payment');
   } else {
     haystack.push(item.description, CATEGORY_LABELS[item.category] || item.category);
+    if (typeof item.notes === 'string') {
+      haystack.push(item.notes);
+    }
     payersOf(item).forEach(p => haystack.push((p.user || members.find(m => m.id === p.user_id))?.name));
+
+    // Also include products/items from itemized or grocery split (case-insensitive)
+    const products = getExpenseProducts(item);
+    products.forEach(prod => {
+      if (prod && prod.name) {
+        haystack.push(prod.name);
+      }
+    });
   }
   haystack.push(String(Math.round(parseFloat(item.amount) || 0)), String(item.amount));
-  return haystack.filter(Boolean).join(' ').toLowerCase().includes(query.toLowerCase());
+
+  const fullHaystackText = haystack.filter(Boolean).join(' ').toLowerCase();
+  return searchTerms.every(term => fullHaystackText.includes(term));
 }
 
 const isAfter = (iso, baseline) => Boolean(iso && baseline) && new Date(iso) > new Date(baseline);
-
-// A UPI app can only be opened from a phone; elsewhere we show the id to copy instead
-const canOpenUpiApp = () => /Android|iPhone|iPad/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
-
-function upiPayLink({ upiId, name, amount, note }) {
-  const params = new URLSearchParams({
-    pa: upiId,
-    pn: name || '',
-    am: Number(amount).toFixed(2),
-    cu: 'INR',
-    tn: note || 'Splitwise settle-up',
-  });
-  return `upi://pay?${params.toString()}`;
-}
 
 const userIdOf = (row) => (row && row.user && row.user.id) ?? (row ? row.user_id : null);
 const firstName = (user) => (user && user.name ? user.name.split(' ')[0] : 'Someone');
@@ -379,43 +383,6 @@ export default function GroupDetailView({
     return firstName(user || members.find(m => m.id === uid));
   };
 
-  // Helper to parse itemized products out of expense notes or description fallback
-  const getExpenseProducts = (exp) => {
-    if (!exp) return [];
-
-    if (exp.notes) {
-      try {
-        const parsed = JSON.parse(exp.notes);
-        if (typeof parsed === 'object' && parsed !== null) {
-          if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-            return parsed.items;
-          }
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
-          }
-        }
-      } catch (e) {
-        console.log('Notes is not JSON string:', exp.notes);
-      }
-    }
-
-    const desc = exp.description || '';
-    const match = desc.match(/\((.*?)\)$/);
-    if (match && match[1]) {
-      const parts = match[1].split(' | ');
-      return parts.map(p => {
-        const sub = p.split(': ₹');
-        return {
-          name: sub[0] ? sub[0].trim() : p,
-          price: sub[1] ? parseFloat(sub[1]) : 0,
-          split_type: 'ALL'
-        };
-      });
-    }
-
-    return [];
-  };
-
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', width: '100%' }}>
       {/* Top Header Navigation */}
@@ -503,7 +470,7 @@ export default function GroupDetailView({
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.85rem', alignItems: 'center' }}>
           <input
             className="form-input"
-            placeholder="Search expenses, people, amounts"
+            placeholder="Search expenses, products, people..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ flex: '1 1 180px', minWidth: 0, padding: '0.4rem 0.65rem', fontSize: '0.8rem' }}
@@ -704,6 +671,32 @@ export default function GroupDetailView({
                               {meta}
                             </div>
                           )}
+                          {(() => {
+                            if (!search.trim()) return null;
+                            const queryTerms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+                            const matchedProds = getExpenseProducts(exp).filter(p => {
+                              if (!p?.name) return false;
+                              const pName = p.name.toLowerCase();
+                              return queryTerms.some(t => pName.includes(t));
+                            });
+                            if (matchedProds.length === 0) return null;
+                            return (
+                              <div style={{
+                                fontSize: '0.725rem',
+                                color: 'var(--accent-primary)',
+                                marginTop: '0.2rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}>
+                                <span style={{ fontSize: '0.75rem' }}>🛒</span>
+                                <span>{matchedProds.slice(0, 2).map(p => p.name).join(', ')}{matchedProds.length > 2 ? ` +${matchedProds.length - 2} more` : ''}</span>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>

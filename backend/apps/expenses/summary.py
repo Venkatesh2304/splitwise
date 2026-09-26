@@ -7,6 +7,7 @@ from collections import defaultdict
 from datetime import date
 
 from .models import Expense, ExpenseCategory, Settlement
+from . import grocery_summary as grocery_builder
 
 CATEGORY_LABELS = dict(ExpenseCategory.choices)
 
@@ -105,4 +106,5 @@ def build(group, month, user_id=None):
         "settled_count": settled.count(),
         "settled_total": round(sum(float(s.amount) for s in settled), 2),
         "available_months": months_with_expenses(group),
+        "grocery_summary": grocery_builder.build_grocery_summary(group=group, user_id=None, month=month),
     }
