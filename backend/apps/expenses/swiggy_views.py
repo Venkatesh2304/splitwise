@@ -107,12 +107,10 @@ def swiggy_logout(request):
     return Response({"message": f"Logged out from Swiggy Instamart for {u.name}."}, status=status.HTTP_200_OK)
 
 def get_swiggy_redirect_uri(request, phone):
-    scheme = request.scheme
-    host = request.get_host()
-    # Force localhost for HTTP IPs because Swiggy MCP blocks non-localhost HTTP
-    if scheme == 'http' and not ('localhost' in host or '127.0.0.1' in host):
-        return f"http://localhost:8000/api/swiggy/callback/?phone={phone}"
-    return f"{scheme}://{host}/api/swiggy/callback/?phone={phone}"
+    # Swiggy MCP OAuth strictly whitelists http://localhost:8000.
+    # Non-localhost hostnames (DuckDNS HTTPS or remote IPs) are rejected by Swiggy's OAuth server.
+    return f"http://localhost:8000/api/swiggy/callback/?phone={phone}"
+
 
 @api_view(['GET'])
 def swiggy_auth_url(request):

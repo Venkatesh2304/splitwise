@@ -178,7 +178,9 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
   };
 
   const isLoggedIn = statusInfo && statusInfo.is_logged_in;
-  const defaultAuthUrl = `https://mcp.swiggy.com/auth/authorize?response_type=code&client_id=swiggy-mcp&redirect_uri=${encodeURIComponent(`${API_BASE_URL}/swiggy/callback/`)}&code_challenge=anMh43oX8zlz5C87l0r9J9XOVaNaKWqDwB0TjTj7fdo&code_challenge_method=S256&state=splitwise_state_123&scope=mcp:tools`;
+  const activePhone = currentUser?.phone_number || statusInfo?.phone_number || '6382247549';
+  const defaultAuthUrl = `https://mcp.swiggy.com/auth/authorize?response_type=code&client_id=swiggy-mcp&redirect_uri=${encodeURIComponent(`http://localhost:8000/api/swiggy/callback/?phone=${activePhone}`)}&code_challenge=anMh43oX8zlz5C87l0r9J9XOVaNaKWqDwB0TjTj7fdo&code_challenge_method=S256&state=splitwise_state_123&scope=mcp:tools`;
+
 
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto' }}>
