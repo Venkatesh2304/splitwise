@@ -37,6 +37,45 @@ class DomainEngineTests(TestCase):
         self.assertEqual(owed[1], 120.0)
         self.assertEqual(owed[2], 80.0)
 
+    def test_split_calculator_shares(self):
+        # A ₹600 rent split 2:1 — two people in the big room, one in the small
+        owed, err = calculate_splits(600.0, SplitType.SHARES, [1, 2], {1: 2, 2: 1})
+        self.assertIsNone(err)
+        self.assertEqual(owed[1], 400.0)
+        self.assertEqual(owed[2], 200.0)
+
+    def test_split_calculator_shares_add_up_to_the_paisa(self):
+        """What the whole thing is for: no amount of odd ratios may lose or invent money."""
+        for total, units in [
+            (100.0, {1: 1, 2: 1, 3: 1}),          # thirds
+            (100.0, {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1}),   # sevenths
+            (1234.57, {1: 3, 2: 2, 3: 1}),
+            (0.03, {1: 1, 2: 1, 3: 1, 4: 1}),     # less than a paisa each
+        ]:
+            with self.subTest(total=total, units=units):
+                owed, err = calculate_splits(total, SplitType.SHARES, list(units), units)
+                self.assertIsNone(err)
+                self.assertEqual(round(sum(owed.values()), 2), total)
+                # Nobody carries the whole rounding difference: one paisa at most each
+                for uid, share in owed.items():
+                    exact = total * units[uid] / sum(units.values())
+                    self.assertLessEqual(abs(share - exact), 0.01)
+
+    def test_split_calculator_shares_can_leave_someone_out(self):
+        """Zero shares means this one wasn't theirs, which is allowed — all zero isn't."""
+        owed, err = calculate_splits(90.0, SplitType.SHARES, [1, 2, 3], {1: 1, 2: 2, 3: 0})
+        self.assertIsNone(err)
+        self.assertEqual(owed, {1: 30.0, 2: 60.0, 3: 0.0})
+
+        owed, err = calculate_splits(90.0, SplitType.SHARES, [1, 2], {1: 0, 2: 0})
+        self.assertEqual(owed, {})
+        self.assertIn("at least one person", err)
+
+    def test_split_calculator_shares_refuses_a_negative_share(self):
+        owed, err = calculate_splits(90.0, SplitType.SHARES, [1, 2], {1: 3, 2: -1})
+        self.assertEqual(owed, {})
+        self.assertIn("less than zero", err)
+
     def test_balance_engine(self):
         members = [1, 2, 3]
         expenses = [{

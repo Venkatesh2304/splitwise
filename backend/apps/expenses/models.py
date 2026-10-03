@@ -44,6 +44,9 @@ class ExpenseShare(models.Model):
     user = models.ForeignKey(UserProfile, on_delete=models.CASCADE)
     amount_owed = models.DecimalField(max_digits=12, decimal_places=2)
     percentage = models.FloatField(default=0.0)
+    # How many shares this person took, when the expense was split by shares. Kept so an
+    # edit can bring the shares back instead of guessing them from the rounded amounts.
+    share_units = models.FloatField(default=0.0)
 
     class Meta:
         unique_together = ('expense', 'user')
