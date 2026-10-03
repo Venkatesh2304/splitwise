@@ -249,6 +249,29 @@ export default function GroupDetailView({
     }
   };
 
+  const handleExportCsv = () => {
+    if (!groupData || !groupData.expenses) return;
+    const headers = ['Date', 'Description', 'Category', 'Amount', 'Paid By'];
+    const rows = groupData.expenses.map(exp => {
+      const date = new Date(exp.created_at).toLocaleDateString('en-IN');
+      const desc = `"${(exp.description || '').replace(/"/g, '""')}"`;
+      const cat = exp.category || '';
+      const amt = exp.amount;
+      const payer = `"${payerSummary(exp, actorId, groupData.members).replace(/"/g, '""')}"`;
+      return [date, desc, cat, amt, payer].join(',');
+    });
+    
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `${groupData.name}_expenses.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+
   const handleDeleteSettlement = async (settlementId) => {
     if (!window.confirm('Delete this settle-up payment? Balances will go back to how they were before it.')) return;
     try {
@@ -416,6 +439,20 @@ export default function GroupDetailView({
             <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#ffffff', lineHeight: 1.2 }}>
               {groupData.name}
             </h2>
+            {groupData.name.toLowerCase().includes('groceries') && (
+              <div style={{ marginBottom: '0.4rem', marginTop: '0.2rem' }}>
+                <button 
+                  onClick={handleExportCsv}
+                  style={{
+                    background: 'none', border: '1px solid var(--border-color)', 
+                    color: 'var(--text-dim)', fontSize: '0.75rem', padding: '0.2rem 0.5rem', 
+                    borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem'
+                  }}
+                >
+                  <Sparkles size={12} /> Export to CSV
+                </button>
+              </div>
+            )}
             <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
               Total Spending: {currency}{groupData.total_spending ? Math.round(groupData.total_spending) : 0}
             </div>
