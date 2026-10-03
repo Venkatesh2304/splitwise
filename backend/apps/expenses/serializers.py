@@ -28,10 +28,11 @@ class ExpenseShareSerializer(serializers.ModelSerializer):
     )
     amount_owed = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0.0)
     percentage = serializers.FloatField(required=False, default=0.0)
+    share_units = serializers.FloatField(required=False, default=0.0)
 
     class Meta:
         model = ExpenseShare
-        fields = ['id', 'user', 'user_id', 'amount_owed', 'percentage']
+        fields = ['id', 'user', 'user_id', 'amount_owed', 'percentage', 'share_units']
 
 class SettlementSerializer(serializers.ModelSerializer):
     payer = UserProfileSerializer(read_only=True)
@@ -135,6 +136,8 @@ class ExpenseSerializer(serializers.ModelSerializer):
             custom_vals = {s['user'].id: float(s.get('amount_owed', 0.0)) for s in shares_data}
         elif split_type == SplitType.PERCENTAGE:
             custom_vals = {s['user'].id: float(s.get('percentage', 0.0)) for s in shares_data}
+        elif split_type == SplitType.SHARES:
+            custom_vals = {s['user'].id: float(s.get('share_units', 0.0)) for s in shares_data}
 
         owed_map, error_msg = calculate_splits(total_amount, split_type, participant_ids, custom_vals)
         if error_msg:
@@ -155,7 +158,8 @@ class ExpenseSerializer(serializers.ModelSerializer):
                 expense=expense,
                 user=s['user'],
                 amount_owed=owed_map.get(uid, 0.0),
-                percentage=s.get('percentage', 0.0)
+                percentage=s.get('percentage', 0.0),
+                share_units=s.get('share_units', 0.0)
             )
 
     def _prepare_itemised(self, validated_data, payers_data, raw_items):

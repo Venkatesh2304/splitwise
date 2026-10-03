@@ -4,7 +4,7 @@ import { api } from '../services/api';
 import { X, Receipt, Calculator, Check, AlertCircle } from 'lucide-react';
 import ItemsEditor, { blankItem } from './ItemsEditor';
 
-const EDITABLE_SPLIT_TYPES = ['EQUAL', 'EXACT', 'PERCENTAGE', 'ITEMS'];
+const EDITABLE_SPLIT_TYPES = ['EQUAL', 'EXACT', 'PERCENTAGE', 'SHARES', 'ITEMS'];
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 // The items stored on an expense, if it was split that way (and isn't a grocery order,
@@ -25,6 +25,14 @@ function storedItems(expense) {
 }
 const userIdOf = (row) => (row.user && row.user.id) ?? row.user_id;
 
+// The − / + either side of a share count
+const stepperStyle = (disabled) => ({
+  width: '26px', height: '26px', flexShrink: 0, borderRadius: 'var(--radius-sm)',
+  border: '1px solid var(--border-color)', backgroundColor: 'rgba(15, 23, 42, 0.8)',
+  color: disabled ? 'var(--text-dim)' : '#ffffff', fontSize: '1rem', lineHeight: 1,
+  cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1,
+});
+
 // editingExpense: an existing manual expense to edit (null = add a new one)
 export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, onExpenseAdded, editingExpense = null }) {
   const { activeUser } = useUser();
@@ -35,11 +43,13 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
   const [category, setCategory] = useState('FOOD');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [paidById, setPaidById] = useState('');
-  const [splitType, setSplitType] = useState('EQUAL'); // 'EQUAL' | 'EXACT' | 'PERCENTAGE'
+  const [splitType, setSplitType] = useState('EQUAL'); // 'EQUAL' | 'EXACT' | 'PERCENTAGE' | 'SHARES' | 'ITEMS'
   
   // Custom split values: { [userId]: amountOrPercentage }
   const [customValues, setCustomValues] = useState({});
   const [selectedSplitMemberIds, setSelectedSplitMemberIds] = useState([]);
+  // How many shares each person takes, when the expense is split that way: { [userId]: '2' }
+  const [shareUnits, setShareUnits] = useState({});
   const [items, setItems] = useState([]);
   const [charges, setCharges] = useState('');
   // Several people can pay for one expense; the list stays hidden until it's needed
@@ -107,6 +117,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setSplitType('EQUAL');
       setItems([]);
       setCharges('');
+      setShareUnits({});
       setManyPayers(false);
       setPayerAmounts({});
       return;
@@ -142,15 +153,41 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       else custom[uid] = memberIds.length ? (100 / memberIds.length).toFixed(2) : '';
     });
     setCustomValues(custom);
+    // A by-shares expense stores the ratio itself, so the steppers come back as they were
+    setShareUnits(type === 'SHARES'
+      ? Object.fromEntries(shares.map(sh => [userIdOf(sh), String(sh.share_units || 0)]))
+      : {});
   }, [isOpen, editingExpense]);
 
   if (!isOpen) return null;
 
   const currencySymbol = currentGroup ? currentGroup.currency : '₹';
   const isItems = splitType === 'ITEMS';
+  const isShares = splitType === 'SHARES';
   const itemsTotal = items.reduce((sum, item) => sum + (parseFloat(item.price) || 0), 0);
   const totalAmountNum = isItems ? round2(itemsTotal + (parseFloat(charges) || 0)) : (parseFloat(amount) || 0);
   const unassignedItems = items.filter(item => item.assigned.length === 0).length;
+
+  const unitsOf = (id) => Math.max(0, parseFloat(shareUnits[id]) || 0);
+  const totalUnits = round2(selectedSplitMemberIds.reduce((sum, id) => sum + unitsOf(id), 0));
+  // Mirrors calculate_splits(SHARES) on the server — floor everyone to the paisa, then
+  // hand the leftovers to whoever that shortchanged most — so this preview is what saves
+  const sharePreview = {};
+  if (isShares && totalUnits > 0) {
+    const totalPaise = Math.round(totalAmountNum * 100);
+    const exact = {};
+    let given = 0;
+    selectedSplitMemberIds.forEach(id => {
+      exact[id] = (totalPaise * unitsOf(id)) / totalUnits;
+      sharePreview[id] = Math.floor(exact[id]);
+      given += sharePreview[id];
+    });
+    [...selectedSplitMemberIds]
+      .sort((a, b) => (exact[b] - Math.floor(exact[b])) - (exact[a] - Math.floor(exact[a])))
+      .slice(0, totalPaise - given)
+      .forEach(id => { sharePreview[id] += 1; });
+    selectedSplitMemberIds.forEach(id => { sharePreview[id] = sharePreview[id] / 100; });
+  }
 
   const payerEntries = Object.entries(payerAmounts)
     .map(([uid, value]) => ({ userId: parseInt(uid, 10), amount: parseFloat(value) || 0 }))
@@ -193,6 +230,8 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
     if (diff > 0.01) {
       splitValidationMsg = `Percentages sum to ${pctSum.toFixed(2)}%, but must equal 100%.`;
     }
+  } else if (isShares && totalUnits <= 0) {
+    splitValidationMsg = 'Give at least one person a share of this expense.';
   }
 
   const toggleSplitMember = (id) => {
@@ -201,7 +240,13 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setSelectedSplitMemberIds(selectedSplitMemberIds.filter(mId => mId !== id));
     } else {
       setSelectedSplitMemberIds([...selectedSplitMemberIds, id]);
+      // Ticked back on with no shares, they'd quietly owe nothing
+      if (unitsOf(id) <= 0) setShareUnits({ ...shareUnits, [id]: '1' });
     }
+  };
+
+  const stepShare = (userId, delta) => {
+    setShareUnits({ ...shareUnits, [userId]: String(Math.max(0, round2(unitsOf(userId) + delta))) });
   };
 
   const handleCustomValueChange = (userId, val) => {
@@ -246,6 +291,8 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
         item.amount_owed = parseFloat(customValues[uid]) || 0;
       } else if (splitType === 'PERCENTAGE') {
         item.percentage = parseFloat(customValues[uid]) || 0;
+      } else if (isShares) {
+        item.share_units = unitsOf(uid);
       }
       return item;
     });
@@ -525,6 +572,19 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 </button>
                 <button
                   type="button"
+                  className={`tab-btn ${isShares ? 'active' : ''}`}
+                  onClick={() => {
+                    setSplitType('SHARES');
+                    // One share each to begin with, so it starts out an even split
+                    setShareUnits(current => Object.fromEntries(
+                      selectedSplitMemberIds.map(id => [id, current[id] ?? '1'])
+                    ));
+                  }}
+                >
+                  By shares
+                </button>
+                <button
+                  type="button"
                   className={`tab-btn ${splitType === 'ITEMS' ? 'active' : ''}`}
                   onClick={() => {
                     setSplitType('ITEMS');
@@ -569,6 +629,13 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 <div style={{ fontSize: '0.8rem', color: 'var(--color-negative)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                   <AlertCircle size={14} />
                   <span>{splitValidationMsg}</span>
+                </div>
+              )}
+
+              {isShares && totalUnits > 0 && (
+                <div style={{ fontSize: '0.775rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+                  {totalUnits} share{totalUnits === 1 ? '' : 's'} in all
+                  {totalAmountNum > 0 && ` · ${currencySymbol}${round2(totalAmountNum / totalUnits).toFixed(2)} a share`}
                 </div>
               )}
 
@@ -626,6 +693,42 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                           value={customValues[m.id] || ''}
                           onChange={(e) => handleCustomValueChange(m.id, e.target.value)}
                         />
+                      )}
+
+                      {isShares && isSelected && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                          <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-muted)', minWidth: '58px', textAlign: 'right' }}>
+                            {currencySymbol}{(sharePreview[m.id] || 0).toFixed(2)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => stepShare(m.id, -1)}
+                            disabled={unitsOf(m.id) <= 0}
+                            title="One share fewer"
+                            style={stepperStyle(unitsOf(m.id) <= 0)}
+                          >
+                            −
+                          </button>
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="form-input"
+                            style={{ width: '48px', padding: '0.3rem 0.35rem', fontSize: '0.85rem', textAlign: 'center' }}
+                            placeholder="0"
+                            value={shareUnits[m.id] ?? ''}
+                            onChange={(e) => setShareUnits({ ...shareUnits, [m.id]: e.target.value })}
+                            aria-label={`Shares for ${m.name}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => stepShare(m.id, 1)}
+                            title="One share more"
+                            style={stepperStyle(false)}
+                          >
+                            +
+                          </button>
+                        </div>
                       )}
 
                       {splitType === 'PERCENTAGE' && isSelected && (

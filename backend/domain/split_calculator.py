@@ -4,6 +4,7 @@ class SplitType:
     EQUAL = 'EQUAL'
     EXACT = 'EXACT'
     PERCENTAGE = 'PERCENTAGE'
+    SHARES = 'SHARES'
 
 def calculate_splits(
     total_amount: float,
@@ -15,9 +16,10 @@ def calculate_splits(
     Validates and calculates exact owed amounts per participant.
     
     :param total_amount: Total expense amount.
-    :param split_type: EQUAL, EXACT, or PERCENTAGE.
+    :param split_type: EQUAL, EXACT, PERCENTAGE, or SHARES.
     :param participant_ids: List of user IDs participating in the expense.
-    :param custom_values: Map of user_id -> exact amount (for EXACT) or percentage (for PERCENTAGE).
+    :param custom_values: Map of user_id -> exact amount (for EXACT), percentage (for
+           PERCENTAGE), or number of shares (for SHARES).
     :return: Tuple of (owed_amounts_map: dict[user_id, float], error_message: str or None)
     """
     if total_amount <= 0:
@@ -68,5 +70,32 @@ def calculate_splits(
             owed_amounts[participant_ids[0]] = round(owed_amounts[participant_ids[0]] + diff, 2)
             
         return owed_amounts, None
+
+    elif split_type == SplitType.SHARES:
+        # Two people in one room take 2 shares, someone on the sofa takes 1: the bill is
+        # divided in proportion, so nobody has to work out the percentages themselves.
+        units = {uid: custom_values.get(uid, 0.0) for uid in participant_ids}
+        if any(u < 0 for u in units.values()):
+            return {}, "A number of shares can't be less than zero."
+
+        total_units = sum(units.values())
+        if total_units <= 0:
+            return {}, "Give at least one person a share of this expense."
+
+        # Worked in whole paise: everyone is floored first, then the paise left over go
+        # one at a time to whoever the flooring shortchanged most, so a share is never
+        # out by more than 0.01 and the shares still add up to the total exactly.
+        total_paise = int(round(total_amount * 100))
+        exact = {uid: (total_paise * units[uid]) / total_units for uid in participant_ids}
+        allotted = {uid: int(exact[uid]) for uid in participant_ids}
+        order = {uid: position for position, uid in enumerate(participant_ids)}
+        shortchanged = sorted(
+            participant_ids,
+            key=lambda uid: (-(exact[uid] - allotted[uid]), order[uid])
+        )
+        for uid in shortchanged[:total_paise - sum(allotted.values())]:
+            allotted[uid] += 1
+
+        return {uid: round(allotted[uid] / 100.0, 2) for uid in participant_ids}, None
 
     return {}, f"Invalid split type '{split_type}'."
