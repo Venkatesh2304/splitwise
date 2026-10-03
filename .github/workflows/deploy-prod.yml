@@ -17,25 +17,4 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            # Navigate to the Prod directory
-            cd /opt/splitwise
-            
-            # Fetch and apply the latest changes for main/master branch
-            git fetch origin
-            git reset --hard origin/main || git reset --hard origin/master
-            
-            # Backend: Install dependencies and apply migrations
-            cd backend
-            /opt/splitwise/.venv/bin/pip install -r requirements.txt
-            /opt/splitwise/.venv/bin/python manage.py migrate
-            
-            # Frontend: Install dependencies and build with resource limits
-            cd ../frontend
-            npm ci
-            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-            systemd-run --user --scope -p MemoryMax=1500M -p CPUQuota=75% npm run build
-            
-            # Restart Prod backend service
-            sudo systemctl restart splitwise_backend.service
-            
-            echo "Deployment to Production successful!"
+            bash /opt/splitwise/deploy.sh prod

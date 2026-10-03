@@ -16,25 +16,4 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
-            # Navigate to the UAT directory
-            cd /opt/splitwise-uat
-            
-            # Fetch and apply the latest changes for UAT branch
-            git fetch origin
-            git reset --hard origin/uat
-            
-            # Backend: Install dependencies and apply migrations
-            cd backend
-            /opt/splitwise-uat/.venv/bin/pip install -r requirements.txt
-            /opt/splitwise-uat/.venv/bin/python manage.py migrate
-            
-            # Frontend: Install dependencies and build with resource limits
-            cd ../frontend
-            npm ci
-            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-            systemd-run --user --scope -p MemoryMax=1500M -p CPUQuota=75% npm run build
-            
-            # Restart UAT backend service
-            sudo systemctl restart splitwise_backend_uat.service
-            
-            echo "Deployment to UAT successful!"
+            bash /opt/splitwise-uat/deploy.sh uat

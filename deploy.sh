@@ -1,38 +1,65 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-# Remote SSH configuration
-REMOTE_HOST="ubuntu@13.235.142.203"
-SSH_KEY="/home/venkatesh/Downloads/billingv2.pem"
-REMOTE_PROJECT_DIR="/home/ubuntu/splitwise"
+# Exit on error
+set -e
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-echo "==> [deploy.sh] Building frontend bundle locally..."
-cd "$PROJECT_DIR/frontend"
-npm run build
-
-cd "$PROJECT_DIR"
-echo "==> [deploy.sh] Checking git status..."
-if [ -n "$(git status --porcelain)" ]; then
-  echo "==> Committing local changes & built frontend/dist..."
-  git add .
-  git commit -m "Auto-deploy update with pre-built dist $(date '+%Y-%m-%d %H:%M:%S')" || true
+# Validate arguments
+ENVIRONMENT=$1
+if [ "$ENVIRONMENT" != "prod" ] && [ "$ENVIRONMENT" != "uat" ]; then
+    echo "Usage: $0 [prod|uat]"
+    exit 1
 fi
 
-echo "==> [deploy.sh] Pushing latest changes & dist to GitHub..."
-git push origin main -f || git push origin MASTER -f || git push origin -f
+# Set variables based on environment
+if [ "$ENVIRONMENT" == "prod" ]; then
+    BRANCH="main"
+    SERVICE_NAME="splitwise_backend.service"
+    DIR="/opt/splitwise"
+else
+    BRANCH="uat"
+    SERVICE_NAME="splitwise_backend_uat.service"
+    DIR="/opt/splitwise-uat"
+fi
 
-echo "==> [deploy.sh] SSH connecting to remote server $REMOTE_HOST..."
-ssh -o StrictHostKeyChecking=no -4 -i "$SSH_KEY" "$REMOTE_HOST" bash <<EOF
-  set -eu
-  if [ ! -d "$REMOTE_PROJECT_DIR" ]; then
-    echo "[Remote] Creating project directory $REMOTE_PROJECT_DIR..."
-    mkdir -p "$REMOTE_PROJECT_DIR"
-  fi
-  cd "$REMOTE_PROJECT_DIR"
-  echo "[Remote] Triggering sync.sh on server..."
-  bash sync.sh
-EOF
+echo "Deploying $ENVIRONMENT environment from branch $BRANCH..."
 
-echo "==> ✅ Remote deployment and sync completed successfully!"
+cd $DIR
+
+# Get the current commit hash before pulling
+# If this is a fresh clone and there is no HEAD, this might fail, so we catch it
+OLD_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
+
+# Pull the latest code
+echo "Pulling latest code from $BRANCH..."
+git fetch origin
+git reset --hard origin/$BRANCH
+
+# Check if frontend changed
+echo "Checking if frontend needs a rebuild..."
+if [ -z "$OLD_HEAD" ]; then
+    FRONTEND_CHANGED="yes"
+else
+    FRONTEND_CHANGED=$(git diff --name-only $OLD_HEAD HEAD | grep "^frontend/" || true)
+fi
+
+if [ -n "$FRONTEND_CHANGED" ] || [ ! -d "frontend/dist" ]; then
+    echo "Frontend changes detected (or dist missing). Rebuilding frontend..."
+    cd frontend
+    npm ci
+    systemd-run --user --scope -p MemoryMax=1500M -p CPUQuota=75% npm run build
+    cd ..
+else
+    echo "No frontend changes detected. Skipping frontend build."
+fi
+
+# Run backend migrations
+echo "Running database migrations..."
+cd backend
+../.venv/bin/python manage.py migrate
+cd ..
+
+# Restart the backend service
+echo "Restarting backend service..."
+sudo systemctl restart $SERVICE_NAME
+
+echo "Deployment to $ENVIRONMENT complete!"
