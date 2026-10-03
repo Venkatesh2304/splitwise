@@ -166,7 +166,7 @@ def _expense_url(snapshot, expense_id=None):
 
 def _is_generated_title(snapshot):
     platform = snapshot.get("platform") or ""
-    return bool(platform) and bool(re.match(rf"^{re.escape(platform)} order #", snapshot["description"], re.I))
+    return bool(platform) and bool(re.match(rf"^{re.escape(platform)}\s*(order\s*#|:\s*)", snapshot["description"], re.I))
 
 def _emit(kind, group_id, actor, title, url, messages, expense_id=None):
     """Record the change, then notify. Both read from the same per-person lines, so the

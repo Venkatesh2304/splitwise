@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { API_BASE_URL } from '../services/api';
 import { X, Zap, Users, UserCheck, User, CheckCircle2, DollarSign } from 'lucide-react';
+import { deriveOrderTitle } from '../utils/products';
 
 export default function ItemizedSplitModal({
   isOpen,
@@ -11,7 +12,13 @@ export default function ItemizedSplitModal({
   onSplitSaved
 }) {
   const isSwiggy = order?.order_type === 'INSTAMART' || (order?.order_id && String(order.order_id).length > 12);
-  const defaultTitle = isSwiggy ? `Swiggy Instamart Order #${order?.order_id || ''}` : `Blinkit Order #${order?.order_id || ''}`;
+  const defaultTitle = useMemo(() => {
+    const platName = isSwiggy ? 'Swiggy' : 'Blinkit';
+    const items = (order && order.item_details && order.item_details.length > 0)
+      ? order.item_details
+      : (order?.existing_split?.notes_items || []);
+    return deriveOrderTitle(platName, items, order?.order_id);
+  }, [isSwiggy, order]);
 
   const [splitMode, setSplitMode] = useState('BILL_LEVEL'); // 'BILL_LEVEL' | 'ITEMIZED'
   const [customTitle, setCustomTitle] = useState('');

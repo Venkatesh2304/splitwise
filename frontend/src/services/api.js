@@ -74,6 +74,13 @@ export const api = {
     const query = params.toString();
     return request(`/groups/${groupId}/summary/${query ? `?${query}` : ''}`);
   },
+  getGroupGrocerySummary: (groupId, { month, userId } = {}) => {
+    const params = new URLSearchParams();
+    if (month) params.set('month', month);
+    if (userId) params.set('user_id', userId);
+    const query = params.toString();
+    return request(`/groups/${groupId}/grocery-summary/${query ? `?${query}` : ''}`);
+  },
   createGroup: (groupData) => request('/groups/', { method: 'POST', body: groupData }),
   addGroupMember: (groupId, userId) => request(`/groups/${groupId}/add_member/`, {
     method: 'POST',

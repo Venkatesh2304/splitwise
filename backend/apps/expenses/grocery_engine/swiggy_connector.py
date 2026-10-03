@@ -6,7 +6,27 @@ from .state import get_swiggy_session
 
 MCP_BASE = "https://mcp.swiggy.com"
 
-def clean_placed_at(status_text):
+from datetime import datetime, timezone, timedelta
+
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+def clean_placed_at(status_text, created_at_raw=None):
+    if created_at_raw:
+        try:
+            if isinstance(created_at_raw, (int, float)) or (isinstance(created_at_raw, str) and created_at_raw.isdigit()):
+                val = float(created_at_raw)
+                if val > 1e11: val = val / 1000.0
+                dt = datetime.fromtimestamp(val, tz=timezone.utc)
+            else:
+                dt_str = str(created_at_raw).replace("Z", "+00:00")
+                dt = datetime.fromisoformat(dt_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            dt_ist = dt.astimezone(IST_TZ)
+            return dt_ist.strftime("%d %b %Y, %I:%M %p")
+        except Exception:
+            pass
+
     if not status_text:
         return "Recently"
     text = str(status_text)
@@ -79,7 +99,8 @@ class SwiggyInstamartConnector(BaseGroceryConnector):
             for ord in orders_raw:
                 ord_id = str(ord.get("orderId"))
                 total_amt = float(ord.get("totalAmount") or 0.0)
-                status_text = clean_placed_at(ord.get("currentStatus"))
+                created_raw = ord.get("createdAt") or ord.get("orderTime") or ord.get("created_at") or ord.get("order_time")
+                status_text = clean_placed_at(ord.get("currentStatus"), created_at_raw=created_raw)
                 
                 bill = ord.get("billDetails", {})
                 item_subtotal = float(bill.get("itemTotal") or total_amt)

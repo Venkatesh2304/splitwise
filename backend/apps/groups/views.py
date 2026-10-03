@@ -110,6 +110,15 @@ class GroupViewSet(viewsets.ModelViewSet):
         viewer = resolve_actor(request.query_params.get('user_id'))
         return Response(summary_builder.build(group, month, viewer.id if viewer else None))
 
+    @action(detail=True, methods=['get'], url_path='grocery-summary')
+    def grocery_summary(self, request, pk=None):
+        """Itemized grocery spends split by category and product keyword."""
+        from apps.expenses import grocery_summary as grocery_builder
+        group = self.get_object()
+        user_id = request.query_params.get('user_id')
+        month = request.query_params.get('month')
+        return Response(grocery_builder.build_grocery_summary(group=group, user_id=user_id, month=month))
+
     @action(detail=True, methods=['post'])
     def seen(self, request, pk=None):
         """Mark this group as looked at. Returns the previous mark so the page can keep

@@ -65,3 +65,34 @@ class BlinkitIntegrationTests(APITestCase):
         # Venkatesh owes 100 + 116 = 216. Alex owes 100.
         self.assertEqual(res.data['owed_breakdown'][self.user1.id], 216.0)
         self.assertEqual(res.data['owed_breakdown'][self.user2.id], 100.0)
+
+    def test_parse_blinkit_order_details_comma_price(self):
+        from apps.expenses.blinkit_views import parse_blinkit_order_details_v2
+        mock_data = {
+            "is_success": True,
+            "response": {
+                "snippets": [
+                    {
+                        "widget_type": "z_v3_image_text_snippet",
+                        "data": {
+                            "title": {"text": "Gulab Groundnut Oil"},
+                            "subtitle1": {"text": "1 l x 1"},
+                            "subtitle3": {"text": "₹1,499 ₹1,289"}
+                        }
+                    },
+                    {
+                        "widget_type": "cart_bill_item",
+                        "data": {
+                            "left_header": {"text": "Bill Total"},
+                            "right_header": {"text": "₹1,298"}
+                        }
+                    }
+                ]
+            }
+        }
+        res = parse_blinkit_order_details_v2(mock_data)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["item_details"][0]["price"], 1289.0)
+        self.assertEqual(res["total_amount"], 1298.0)
+        self.assertEqual(res["other_charges"], 9.0)
+

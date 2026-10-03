@@ -7,6 +7,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
 
+from django.db.models import Q
 from apps.users.models import UserProfile
 from apps.expenses.models import Expense
 from apps.expenses.grocery_engine import GrocerySplitEngine
@@ -19,14 +20,24 @@ from apps.expenses.blinkit_views import get_user_profile_by_req
 
 MCP_BASE = "https://mcp.swiggy.com"
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
 def clean_placed_at(status_text, created_at_raw=None):
     if created_at_raw:
         try:
-            dt_str = str(created_at_raw).replace("Z", "+00:00")
-            dt = datetime.fromisoformat(dt_str)
-            return dt.strftime("%d %b %Y, %I:%M %p")
+            if isinstance(created_at_raw, (int, float)) or (isinstance(created_at_raw, str) and created_at_raw.isdigit()):
+                val = float(created_at_raw)
+                if val > 1e11: val = val / 1000.0
+                dt = datetime.fromtimestamp(val, tz=timezone.utc)
+            else:
+                dt_str = str(created_at_raw).replace("Z", "+00:00")
+                dt = datetime.fromisoformat(dt_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            dt_ist = dt.astimezone(IST_TZ)
+            return dt_ist.strftime("%d %b %Y, %I:%M %p")
         except Exception:
             pass
 
@@ -96,12 +107,10 @@ def swiggy_logout(request):
     return Response({"message": f"Logged out from Swiggy Instamart for {u.name}."}, status=status.HTTP_200_OK)
 
 def get_swiggy_redirect_uri(request, phone):
-    scheme = request.scheme
-    host = request.get_host()
-    # Force localhost for HTTP IPs because Swiggy MCP blocks non-localhost HTTP
-    if scheme == 'http' and not ('localhost' in host or '127.0.0.1' in host):
-        return f"http://localhost:8000/api/swiggy/callback/?phone={phone}"
-    return f"{scheme}://{host}/api/swiggy/callback/?phone={phone}"
+    # Swiggy MCP OAuth strictly whitelists http://localhost:8000.
+    # Non-localhost hostnames (DuckDNS HTTPS or remote IPs) are rejected by Swiggy's OAuth server.
+    return f"http://localhost:8000/api/swiggy/callback/?phone={phone}"
+
 
 @api_view(['GET'])
 def swiggy_auth_url(request):
@@ -400,7 +409,9 @@ def swiggy_orders(request):
     output_orders = []
     for ord_item in orders_list:
         ord_id = str(ord_item.get("order_id", ""))
-        existing_exp = Expense.objects.filter(description__icontains=ord_id).first()
+        existing_exp = Expense.objects.filter(
+            Q(description__icontains=ord_id) | Q(notes__icontains=f'"order_id": "{ord_id}"') | Q(notes__icontains=ord_id)
+        ).first()
         
         ord_copy = dict(ord_item)
         if existing_exp:

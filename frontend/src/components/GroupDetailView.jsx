@@ -3,6 +3,8 @@ import { api } from '../services/api';
 import { useUser } from '../context/UserContext';
 import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight, Sparkles } from 'lucide-react';
 import GroupSummary from './GroupSummary';
+import { canOpenUpiApp, upiPayLink } from '../utils/upi';
+import { getExpenseProducts, getExpenseSource, calculateItemBreakdown } from '../utils/products';
 
 const CATEGORY_LABELS = {
   FOOD: '🍔 Food & Dining',
@@ -23,33 +25,35 @@ function involvesUser(item, userId) {
 }
 
 function matchesSearch(item, query, members) {
-  if (!query) return true;
+  if (!query || !query.trim()) return true;
+  const q = query.trim().toLowerCase();
+  const searchTerms = q.split(/\s+/).filter(Boolean);
+
   const haystack = [];
   if (item.kind === 'settlement') {
     haystack.push(item.payer?.name, item.payee?.name, item.notes, 'settle up payment');
   } else {
     haystack.push(item.description, CATEGORY_LABELS[item.category] || item.category);
+    if (typeof item.notes === 'string') {
+      haystack.push(item.notes);
+    }
     payersOf(item).forEach(p => haystack.push((p.user || members.find(m => m.id === p.user_id))?.name));
+
+    // Also include products/items from itemized or grocery split (case-insensitive)
+    const products = getExpenseProducts(item);
+    products.forEach(prod => {
+      if (prod && prod.name) {
+        haystack.push(prod.name);
+      }
+    });
   }
   haystack.push(String(Math.round(parseFloat(item.amount) || 0)), String(item.amount));
-  return haystack.filter(Boolean).join(' ').toLowerCase().includes(query.toLowerCase());
+
+  const fullHaystackText = haystack.filter(Boolean).join(' ').toLowerCase();
+  return searchTerms.every(term => fullHaystackText.includes(term));
 }
 
 const isAfter = (iso, baseline) => Boolean(iso && baseline) && new Date(iso) > new Date(baseline);
-
-// A UPI app can only be opened from a phone; elsewhere we show the id to copy instead
-const canOpenUpiApp = () => /Android|iPhone|iPad/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
-
-function upiPayLink({ upiId, name, amount, note }) {
-  const params = new URLSearchParams({
-    pa: upiId,
-    pn: name || '',
-    am: Number(amount).toFixed(2),
-    cu: 'INR',
-    tn: note || 'Splitwise settle-up',
-  });
-  return `upi://pay?${params.toString()}`;
-}
 
 const userIdOf = (row) => (row && row.user && row.user.id) ?? (row ? row.user_id : null);
 const firstName = (user) => (user && user.name ? user.name.split(' ')[0] : 'Someone');
@@ -74,12 +78,7 @@ function relativeTime(iso) {
 }
 
 function isGrocerySplit(exp) {
-  try {
-    const notes = JSON.parse(exp.notes || '');
-    return Boolean(notes && notes.platform);
-  } catch {
-    return false;
-  }
+  return getExpenseSource(exp).isPlatform;
 }
 
 // Who actually paid (not who typed it in)
@@ -379,43 +378,6 @@ export default function GroupDetailView({
     return firstName(user || members.find(m => m.id === uid));
   };
 
-  // Helper to parse itemized products out of expense notes or description fallback
-  const getExpenseProducts = (exp) => {
-    if (!exp) return [];
-
-    if (exp.notes) {
-      try {
-        const parsed = JSON.parse(exp.notes);
-        if (typeof parsed === 'object' && parsed !== null) {
-          if (Array.isArray(parsed.items) && parsed.items.length > 0) {
-            return parsed.items;
-          }
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
-          }
-        }
-      } catch (e) {
-        console.log('Notes is not JSON string:', exp.notes);
-      }
-    }
-
-    const desc = exp.description || '';
-    const match = desc.match(/\((.*?)\)$/);
-    if (match && match[1]) {
-      const parts = match[1].split(' | ');
-      return parts.map(p => {
-        const sub = p.split(': ₹');
-        return {
-          name: sub[0] ? sub[0].trim() : p,
-          price: sub[1] ? parseFloat(sub[1]) : 0,
-          split_type: 'ALL'
-        };
-      });
-    }
-
-    return [];
-  };
-
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', width: '100%' }}>
       {/* Top Header Navigation */}
@@ -503,7 +465,7 @@ export default function GroupDetailView({
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.85rem', alignItems: 'center' }}>
           <input
             className="form-input"
-            placeholder="Search expenses, people, amounts"
+            placeholder="Search expenses, products, people..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ flex: '1 1 180px', minWidth: 0, padding: '0.4rem 0.65rem', fontSize: '0.8rem' }}
@@ -704,6 +666,32 @@ export default function GroupDetailView({
                               {meta}
                             </div>
                           )}
+                          {(() => {
+                            if (!search.trim()) return null;
+                            const queryTerms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+                            const matchedProds = getExpenseProducts(exp).filter(p => {
+                              if (!p?.name) return false;
+                              const pName = p.name.toLowerCase();
+                              return queryTerms.some(t => pName.includes(t));
+                            });
+                            if (matchedProds.length === 0) return null;
+                            return (
+                              <div style={{
+                                fontSize: '0.725rem',
+                                color: 'var(--accent-primary)',
+                                marginTop: '0.2rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
+                              }}>
+                                <span style={{ fontSize: '0.75rem' }}>🛒</span>
+                                <span>{matchedProds.slice(0, 2).map(p => p.name).join(', ')}{matchedProds.length > 2 ? ` +${matchedProds.length - 2} more` : ''}</span>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
@@ -910,22 +898,28 @@ export default function GroupDetailView({
             </div>
 
             {/* Modal Internal Tabs Switcher */}
-            <div style={{ padding: '0.75rem 1rem 0 1rem' }}>
-              <div className="tab-group">
-                <button
-                  className={`tab-btn ${modalTab === 'overall' ? 'active' : ''}`}
-                  onClick={() => setModalTab('overall')}
-                >
-                  Overall Breakdown
-                </button>
-                <button
-                  className={`tab-btn ${modalTab === 'items' ? 'active' : ''}`}
-                  onClick={() => setModalTab('items')}
-                >
-                  Items
-                </button>
-              </div>
-            </div>
+            {(() => {
+              const productsCount = getExpenseProducts(selectedExpenseDetails).length;
+              if (productsCount === 0) return null;
+              return (
+                <div style={{ padding: '0.75rem 1rem 0 1rem' }}>
+                  <div className="tab-group">
+                    <button
+                      className={`tab-btn ${modalTab === 'overall' ? 'active' : ''}`}
+                      onClick={() => setModalTab('overall')}
+                    >
+                      Overall Breakdown
+                    </button>
+                    <button
+                      className={`tab-btn ${modalTab === 'items' ? 'active' : ''}`}
+                      onClick={() => setModalTab('items')}
+                    >
+                      Items ({productsCount})
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="modal-body" style={{ padding: '1rem' }}>
               {/* TAB 1: OVERALL BREAKDOWN */}
@@ -935,20 +929,40 @@ export default function GroupDetailView({
                     {getCleanTitle(selectedExpenseDetails.description)}
                   </div>
                   
-                  {/* Order Date badge display */}
+                  {/* Order / Itemized Date badge display */}
                   {(() => {
+                    const source = getExpenseSource(selectedExpenseDetails);
                     let orderDateDisplay = selectedExpenseDetails.date ? formatDateGroupKey({ date: selectedExpenseDetails.date }) : 'Recent';
-                    if (selectedExpenseDetails.notes) {
-                      try {
-                        const parsedNotes = JSON.parse(selectedExpenseDetails.notes);
-                        if (parsedNotes.placed_at) {
-                          orderDateDisplay = parsedNotes.placed_at;
-                        }
-                      } catch(e) {}
+                    if (source.placedAt) {
+                      orderDateDisplay = source.placedAt;
+                      if (/^today/i.test(orderDateDisplay) && selectedExpenseDetails.date) {
+                        const formattedD = formatDateGroupKey({ date: selectedExpenseDetails.date });
+                        orderDateDisplay = orderDateDisplay.replace(/^today/i, formattedD);
+                      } else if (/^yesterday/i.test(orderDateDisplay) && selectedExpenseDetails.date) {
+                        const formattedD = formatDateGroupKey({ date: selectedExpenseDetails.date });
+                        orderDateDisplay = orderDateDisplay.replace(/^yesterday/i, formattedD);
+                      }
                     }
                     return (
-                      <div style={{ fontSize: '0.775rem', color: 'var(--text-dim)', marginBottom: '0.5rem' }}>
-                        Order Date: <span style={{ color: '#ffffff', fontWeight: 600 }}>{orderDateDisplay}</span>
+                      <div style={{ fontSize: '0.775rem', color: 'var(--text-dim)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        {source.isPlatform ? (
+                          <>
+                            <span>Order Date: <strong style={{ color: '#ffffff' }}>{orderDateDisplay}</strong></span>
+                            <span className="balance-tag neutral" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem' }}>{source.label}</span>
+                            {source.orderId && (
+                              <span className="balance-tag neutral" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', opacity: 0.85 }}>
+                                #{source.orderId}
+                              </span>
+                            )}
+                          </>
+                        ) : source.isItemized ? (
+                          <>
+                            <span>Itemized Bill · <strong style={{ color: '#ffffff' }}>{orderDateDisplay}</strong></span>
+                            <span className="balance-tag neutral" style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem' }}>Itemized</span>
+                          </>
+                        ) : (
+                          <span>Expense Date: <strong style={{ color: '#ffffff' }}>{orderDateDisplay}</strong></span>
+                        )}
                       </div>
                     );
                   })()}
@@ -1016,8 +1030,8 @@ export default function GroupDetailView({
                   </h4>
 
                   {(() => {
-                    const productsList = getExpenseProducts(selectedExpenseDetails);
-                    if (productsList.length === 0) {
+                    const breakdown = calculateItemBreakdown(selectedExpenseDetails, members, myUserId);
+                    if (breakdown.items.length === 0) {
                       return (
                         <div style={{
                           padding: '1.25rem',
@@ -1032,111 +1046,44 @@ export default function GroupDetailView({
                       );
                     }
 
-                    const numMembers = Math.max(1, members.length);
-                    let totalProductsValue = 0;
-                    let mySubtotalProducts = 0;
-
-                    productsList.forEach(p => {
-                      const prodValue = p.price || 0;
-                      totalProductsValue += prodValue;
-
-                      const splitType = p.split_type || 'ALL';
-                      const assignedIds = p.assigned_member_ids || [];
-
-                      if (splitType === 'ALL') {
-                        mySubtotalProducts += (prodValue / numMembers);
-                      } else if (splitType === 'PERSONAL') {
-                        const buyerObj = selectedExpenseDetails.created_by;
-                        const buyerId = buyerObj ? (typeof buyerObj === 'object' ? buyerObj.id : buyerObj) : null;
-                        const isPersonalForMe = (assignedIds.length > 0 && assignedIds.map(Number).includes(Number(myUserId))) || (Number(buyerId) === Number(myUserId));
-                        if (isPersonalForMe) {
-                          mySubtotalProducts += prodValue;
-                        }
-                      } else if (splitType === 'SPECIFIC') {
-                        if (assignedIds.length > 0 && assignedIds.map(Number).includes(Number(myUserId))) {
-                          mySubtotalProducts += (prodValue / assignedIds.length);
-                        } else if (assignedIds.length === 0) {
-                          mySubtotalProducts += (prodValue / numMembers);
-                        }
-                      }
-                    });
-
-                    const totalCommonFees = Math.max(0, parseFloat(selectedExpenseDetails.amount) - totalProductsValue);
-                    const myFeeShare = totalProductsValue > 0 ? (mySubtotalProducts / totalProductsValue) * totalCommonFees : 0;
-
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                        {productsList.map((item, itIdx) => {
-                          const prodValue = item.price || 0;
-                          const splitType = item.split_type || 'ALL';
-                          const assignedIds = item.assigned_member_ids || [];
-                          const assignedNames = item.assigned_names || [];
-
-                          let myProductShare = 0;
-                          if (splitType === 'ALL') {
-                            myProductShare = prodValue / numMembers;
-                          } else if (splitType === 'PERSONAL') {
-                            const buyerObj = selectedExpenseDetails.created_by;
-                            const buyerId = buyerObj ? (typeof buyerObj === 'object' ? buyerObj.id : buyerObj) : null;
-                            const isPersonalForMe = (assignedIds.length > 0 && assignedIds.map(Number).includes(Number(myUserId))) || (Number(buyerId) === Number(myUserId));
-                            if (isPersonalForMe) {
-                              myProductShare = prodValue;
-                            }
-                          } else if (splitType === 'SPECIFIC') {
-                            if (assignedIds.length > 0) {
-                              if (assignedIds.map(Number).includes(Number(myUserId))) {
-                                myProductShare = prodValue / assignedIds.length;
-                              }
-                            } else {
-                              myProductShare = prodValue / numMembers;
-                            }
-                          }
-
-                          const isZeroShare = myProductShare === 0;
-
-                          const badgeText = splitType === 'ALL'
-                            ? 'Everyone'
-                            : splitType === 'PERSONAL'
-                            ? `Personal (${selectedExpenseDetails.created_by ? selectedExpenseDetails.created_by.name.split(' ')[0] : 'Self'})`
-                            : `Chosen (${assignedNames.length > 0 ? assignedNames.join(', ') : 'Members'})`;
-
-                          return (
-                            <div
-                              key={itIdx}
-                              style={{
-                                padding: '0.75rem 0.85rem',
-                                backgroundColor: 'rgba(15, 23, 42, 0.6)',
-                                border: '1px solid var(--border-color)',
-                                borderRadius: 'var(--radius-md)',
-                                fontSize: '0.825rem',
-                                opacity: isZeroShare ? 0.35 : 1,
-                                filter: isZeroShare ? 'grayscale(80%)' : 'none',
-                                transition: 'all 0.2s ease'
-                              }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
-                                <div style={{ fontWeight: 700, color: isZeroShare ? 'var(--text-dim)' : '#ffffff' }}>
-                                  {item.name}
-                                </div>
-                                <span className="balance-tag neutral" style={{ fontSize: '0.675rem', padding: '0.15rem 0.45rem' }}>
-                                  {badgeText}
-                                </span>
+                        {breakdown.items.map((item, itIdx) => (
+                          <div
+                            key={itIdx}
+                            style={{
+                              padding: '0.75rem 0.85rem',
+                              backgroundColor: 'rgba(15, 23, 42, 0.6)',
+                              border: '1px solid var(--border-color)',
+                              borderRadius: 'var(--radius-md)',
+                              fontSize: '0.825rem',
+                              opacity: item.isZeroShare ? 0.35 : 1,
+                              filter: item.isZeroShare ? 'grayscale(80%)' : 'none',
+                              transition: 'all 0.2s ease'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                              <div style={{ fontWeight: 700, color: item.isZeroShare ? 'var(--text-dim)' : '#ffffff' }}>
+                                {item.name}
                               </div>
-
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                                <span>Product Value: <strong style={{ color: '#ffffff' }}>{currency}{Math.round(prodValue)}</strong></span>
-                                <span>
-                                  My Share: <strong style={{ color: isZeroShare ? 'var(--text-dim)' : 'var(--accent-primary)' }}>
-                                    {currency}{Math.round(myProductShare)}
-                                  </strong>
-                                </span>
-                              </div>
+                              <span className="balance-tag neutral" style={{ fontSize: '0.675rem', padding: '0.15rem 0.45rem' }}>
+                                {item.badgeText}
+                              </span>
                             </div>
-                          );
-                        })}
+
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                              <span>Product Value: <strong style={{ color: '#ffffff' }}>{currency}{Math.round(item.price)}</strong></span>
+                              <span>
+                                My Share: <strong style={{ color: item.isZeroShare ? 'var(--text-dim)' : 'var(--accent-primary)' }}>
+                                  {currency}{Math.round(item.myShare)}
+                                </strong>
+                              </span>
+                            </div>
+                          </div>
+                        ))}
 
                         {/* Dedicated My Share of Taxes & Other Charges Row */}
-                        {totalCommonFees > 0 && (
+                        {breakdown.totalCommonFees > 0 && (
                           <div style={{
                             padding: '0.65rem 0.85rem',
                             backgroundColor: 'rgba(245, 158, 11, 0.08)',
@@ -1146,7 +1093,7 @@ export default function GroupDetailView({
                           }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontWeight: 600, color: '#f59e0b' }}>
                               <span>Taxes & Other Charges (My Share)</span>
-                              <strong>{currency}{Math.round(myFeeShare)}</strong>
+                              <strong>{currency}{Math.round(breakdown.myFeeShare)}</strong>
                             </div>
                           </div>
                         )}

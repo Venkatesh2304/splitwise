@@ -199,7 +199,7 @@ class ExpenseEditedTests(PushTestBase):
         # Rahul re-split it: Akash (payer) and Anish hear about it
         self.assertEqual(self.recipients(), sorted([self.akash.id, self.anish.id]))
         msg = self.to(self.anish)[0]
-        self.assertEqual(msg["title"], "🛒 Rahul updated “Blinkit Order #ORD2”")
+        self.assertEqual(msg["title"], "🛒 Rahul updated “Blinkit: Milk, Eggs”")
         self.assertEqual(msg["body"], "your share ₹80 → ₹33.33 · total ₹180")
         self.assertEqual(msg["tag"], "order-ORD2")
 
