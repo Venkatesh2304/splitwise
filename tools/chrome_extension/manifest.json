@@ -13,7 +13,7 @@
     "https://*.blinkit.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
-    "http://13.235.142.203/*"
+    "https://ramasplit.duckdns.org/*"
   ],
   "action": {
     "default_popup": "popup.html"
