@@ -475,9 +475,9 @@ def blinkit_orders(request):
     try:
         u = get_user_profile_by_req(request)
         force_refresh = request.query_params.get("refresh") == "true"
-        if force_refresh:
+        if force_refresh and not u.blinkit_access_token:
             return Response({
-                "error": "Direct server refresh is blocked by Cloudflare. Please use the Splitwise Blinkit Sync Chrome Extension to sync orders.",
+                "error": "Connect Blinkit above, or use the Splitwise Blinkit Sync Chrome Extension to sync orders.",
                 "orders": OrderStoreManager.get_saved_orders(u, "BLINKIT")
             }, status=status.HTTP_400_BAD_REQUEST)
 

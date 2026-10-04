@@ -1,5 +1,5 @@
 // Configurable Base Server URL
-const DEFAULT_SERVER_URL = "http://13.235.142.203:5002"; // AWS EC2 Backend Server URL
+const DEFAULT_SERVER_URL = "https://ramasplit.duckdns.org";
 
 document.addEventListener("DOMContentLoaded", () => {
     const serverUrlInput = document.getElementById("serverUrl");
