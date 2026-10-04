@@ -96,3 +96,24 @@ class BlinkitIntegrationTests(APITestCase):
         self.assertEqual(res["total_amount"], 1298.0)
         self.assertEqual(res["other_charges"], 9.0)
 
+
+    def test_order_history_total_ignores_return_card_date(self):
+        from apps.expenses.blinkit_views import extract_blinkit_orders_from_sdui
+
+        def card(order_id, title, underlined):
+            return {
+                "widget_type": "order_history_container_vr",
+                "tracking": {"common_attributes": {
+                    "order_id": order_id,
+                    "deeplink": f"grofers://widgetized/order_details_v2?cart_id=900&order_id={order_id}"
+                }},
+                "data": {"items": [{"data": {"title": {"text": title}, "left_underlined_subtitle": {"text": underlined}}}]}
+            }
+
+        orders = extract_blinkit_orders_from_sdui([
+            card("101", "Exchange completed", "19 Sep, 12:41 am"),
+            card("102", "Delivered", "₹1,401"),
+        ])
+        totals = {o["order_id"]: o["total_amount"] for o in orders}
+        self.assertEqual(totals["101"], 0.0)
+        self.assertEqual(totals["102"], 1401.0)

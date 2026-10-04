@@ -216,9 +216,9 @@ def extract_blinkit_orders_from_sdui(root):
             for item in items:
                 item_data = item.get("data") or {}
                 if "left_underlined_subtitle" in item_data:
-                    price_str = item_data["left_underlined_subtitle"].get("text", "")
-                    price_str = re.sub(r'[^\d.]', '', price_str)
-                    if price_str: total_amount = float(price_str)
+                    # Return/exchange cards put a date here ("19 Sep, 12:41 am"), so only a ₹ amount counts
+                    m_price = re.search(r'₹\s*([0-9,]+(?:\.\d+)?)', item_data["left_underlined_subtitle"].get("text", ""))
+                    if m_price: total_amount = float(m_price.group(1).replace(',', ''))
                 if "subtitle" in item_data:
                     placed_at = resolve_blinkit_placed_at(item_data["subtitle"].get("text", placed_at))
                 if "horizontal_item_list" in item_data:
@@ -475,9 +475,9 @@ def blinkit_orders(request):
     try:
         u = get_user_profile_by_req(request)
         force_refresh = request.query_params.get("refresh") == "true"
-        if force_refresh:
+        if force_refresh and not u.blinkit_access_token:
             return Response({
-                "error": "Direct server refresh is blocked by Cloudflare. Please use the Splitwise Blinkit Sync Chrome Extension to sync orders.",
+                "error": "Connect Blinkit above, or use the Splitwise Blinkit Sync Chrome Extension to sync orders.",
                 "orders": OrderStoreManager.get_saved_orders(u, "BLINKIT")
             }, status=status.HTTP_400_BAD_REQUEST)
 
