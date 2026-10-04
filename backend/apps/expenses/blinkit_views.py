@@ -216,9 +216,9 @@ def extract_blinkit_orders_from_sdui(root):
             for item in items:
                 item_data = item.get("data") or {}
                 if "left_underlined_subtitle" in item_data:
-                    price_str = item_data["left_underlined_subtitle"].get("text", "")
-                    price_str = re.sub(r'[^\d.]', '', price_str)
-                    if price_str: total_amount = float(price_str)
+                    # Return/exchange cards put a date here ("19 Sep, 12:41 am"), so only a ₹ amount counts
+                    m_price = re.search(r'₹\s*([0-9,]+(?:\.\d+)?)', item_data["left_underlined_subtitle"].get("text", ""))
+                    if m_price: total_amount = float(m_price.group(1).replace(',', ''))
                 if "subtitle" in item_data:
                     placed_at = resolve_blinkit_placed_at(item_data["subtitle"].get("text", placed_at))
                 if "horizontal_item_list" in item_data:
