@@ -121,6 +121,24 @@ def derive_order_title(platform_name: str, items: Optional[List[Dict[str, Any]]]
         return f"{prefix}: Order #{order_id}"
     return f"{prefix}: Groceries"
 
+def order_expense_query(order_id, platform_name=None) -> Q:
+    """Find the expense for one platform order, without matching its neighbours.
+
+    The old query used a bare `icontains` on the order id, so order "12345" also
+    matched "123456" — and process_split deletes everything it matches. Both terms
+    here are anchored, and the platform narrows it further once more than one
+    Swiggy id namespace exists.
+    """
+    oid = str(order_id)
+    # Only the JSON form, because the closing quote is what stops "12345" matching
+    # "123456". A description match like 'Order #12345' has that prefix problem, and
+    # this query feeds a delete.
+    q = Q(notes__icontains=f'"order_id": "{oid}"')
+    if platform_name:
+        q &= Q(notes__icontains=f'"platform": "{platform_name}"')
+    return q
+
+
 class GrocerySplitEngine:
     """Universal Splitting Engine for any Grocery Platform (Blinkit, Swiggy Instamart, Zepto, etc.)."""
 
@@ -232,7 +250,7 @@ class GrocerySplitEngine:
 
         # A pre-existing split for this order ID makes this a re-split (an edit):
         # snapshot it for the notification before it's replaced.
-        order_query = Q(description__icontains=str(order_id)) | Q(notes__icontains=f'"order_id": "{order_id}"') | Q(notes__icontains=str(order_id))
+        order_query = order_expense_query(order_id, platform_name)
         previous = list(Expense.objects.filter(order_query).order_by('created_at'))
         before = events.snapshot_expense(previous[0]) if previous else None
 
@@ -288,9 +306,9 @@ class GrocerySplitEngine:
         }
 
     @staticmethod
-    def remove_split(order_id: str, actor_id: Optional[int] = None) -> Dict[str, Any]:
+    def remove_split(order_id: str, actor_id: Optional[int] = None, platform_name: Optional[str] = None) -> Dict[str, Any]:
         """Deletes any expense corresponding to the given order ID."""
-        order_query = Q(description__icontains=str(order_id)) | Q(notes__icontains=f'"order_id": "{order_id}"') | Q(notes__icontains=str(order_id))
+        order_query = order_expense_query(order_id, platform_name)
         expenses = Expense.objects.filter(order_query)
         snapshots = [events.snapshot_expense(e) for e in expenses]
         deleted_count, _ = expenses.delete()

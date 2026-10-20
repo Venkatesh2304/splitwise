@@ -1,4 +1,6 @@
+import os
 import time
+import tempfile
 import uuid
 
 # Per-phone isolated Blinkit session storage
@@ -85,3 +87,70 @@ def get_swiggy_order_cache(phone_number=None):
     return SWIGGY_ORDER_CACHES[phone_clean]
 
 CACHE_TTL_SECONDS = 600
+
+# Swiggy food orders are a separate platform with its own ids, so they get their own
+# cache bucket rather than sharing the Instamart one.
+SWIGGY_FOOD_ORDER_CACHES = {}
+
+
+def get_swiggy_food_order_cache(phone_number=None):
+    phone_clean = str(phone_number or "6382247549").strip()
+    if phone_clean not in SWIGGY_FOOD_ORDER_CACHES:
+        SWIGGY_FOOD_ORDER_CACHES[phone_clean] = {
+            "timestamp": 0,
+            "data": None
+        }
+    return SWIGGY_FOOD_ORDER_CACHES[phone_clean]
+
+
+# Whether Blinkit's Cloudflare is currently blocking this host's IP. Datacenter IPs
+# get blocked; a home connection usually isn't. Detected passively, as a by-product of
+# calls the app already makes, so nothing extra is ever requested just to find out.
+#
+# The verdict goes in a temp file rather than module state because gunicorn runs
+# several workers: the request that discovers the block and the one that reports it to
+# the UI are usually different processes. The file is per-host and disappears on
+# reboot, which just means it gets re-detected.
+BLINKIT_BLOCK_TTL_SECONDS = 6 * 3600
+_BLINKIT_BLOCK_FILE = os.path.join(tempfile.gettempdir(), "splitwise_blinkit_block")
+
+
+def mark_blinkit_blocked(status_code=403):
+    try:
+        with open(_BLINKIT_BLOCK_FILE, "w") as fh:
+            fh.write(str(time.time()))
+    except OSError:
+        pass
+
+
+def mark_blinkit_reachable():
+    try:
+        os.remove(_BLINKIT_BLOCK_FILE)
+    except OSError:
+        pass
+
+
+def blinkit_direct_login_available():
+    """False when Blinkit is blocking this host, so the UI can hide a login that
+    cannot succeed and point at the Chrome extension instead."""
+    if os.environ.get("BLINKIT_DIRECT_LOGIN", "").strip() == "0":
+        return False
+    try:
+        with open(_BLINKIT_BLOCK_FILE) as fh:
+            blocked_at = float(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        return True
+    return (time.time() - blocked_at) > BLINKIT_BLOCK_TTL_SECONDS
+
+
+def looks_like_cloudflare_block(res):
+    """Blinkit fronts with Cloudflare; a block is a 403 with a challenge page."""
+    try:
+        if res.status_code != 403:
+            return False
+        if "cf-mitigated" in {k.lower() for k in res.headers.keys()}:
+            return True
+        body = (res.text or "")[:4000].lower()
+        return "you have been blocked" in body or "cf_chl" in body or "attention required" in body
+    except Exception:
+        return False

@@ -98,7 +98,8 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       if (res.ok && (data.success || data.ok)) {
         setOtpSent(true);
       } else {
-        alert(data.error || 'Failed to send OTP.');
+        setError(data.error || 'Failed to send OTP.');
+        if (data.blocked) fetchStatusAndOrders(false);
       }
     } catch (err) {
       alert(err.message);
@@ -123,7 +124,8 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
         setOtpCode('');
         fetchStatusAndOrders(true);
       } else {
-        alert(data.error || data.message || 'OTP verification failed.');
+        setError(data.error || data.message || 'OTP verification failed.');
+        if (data.blocked) fetchStatusAndOrders(false);
       }
     } catch (err) {
       alert(err.message);
@@ -174,6 +176,9 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
   };
 
   const isLoggedIn = statusInfo && statusInfo.is_logged_in;
+  // Blinkit's Cloudflare blocks datacenter IPs, so on the server the OTP login can
+  // never work. The Chrome extension can, because it runs in the user's own browser.
+  const directLoginAvailable = !statusInfo || statusInfo.direct_login_available !== false;
 
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto' }}>
@@ -195,7 +200,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
               Blinkit Orders ({currentUser?.name || 'Synced'})
             </span>
             <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-              {isLoggedIn ? '🌐 Live from Blinkit' : '⚡ Synced via Chrome Extension'}
+              {!directLoginAvailable ? '⚡ Sync via Chrome extension' : (isLoggedIn ? '🌐 Live from Blinkit' : '⚡ Synced via Chrome Extension')}
             </span>
           </div>
         </div>
@@ -242,7 +247,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       </div>
 
       {/* In-Tab OTP Authentication Form */}
-      {statusInfo && !isLoggedIn && (
+      {statusInfo && !isLoggedIn && directLoginAvailable && (
         <div className="card" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
           <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#ffffff', marginBottom: '0.35rem' }}>
             Connect Blinkit Account
@@ -298,6 +303,23 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
               </div>
             </form>
           )}
+        </div>
+      )}
+
+      {statusInfo && !directLoginAvailable && (
+        <div className="card" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
+          <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#ffffff', marginBottom: '0.35rem' }}>
+            Sync with the Chrome extension
+          </h4>
+          <p style={{ fontSize: '0.775rem', color: 'var(--text-dim)', marginBottom: '0.5rem' }}>
+            Blinkit blocks requests coming from this server, so signing in here can't work.
+            The <strong>Splitwise Blinkit Sync</strong> Chrome extension runs in your own
+            browser, where Blinkit does answer.
+          </p>
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>
+            Open <strong>blinkit.com</strong>, sign in there, then click the extension's
+            <strong> Sync Blinkit Orders Now</strong>. Your orders show up here straight after.
+          </p>
         </div>
       )}
 
