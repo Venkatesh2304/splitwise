@@ -367,7 +367,6 @@ def blinkit_status(request):
         "phone_number": u.phone_number,
         "is_logged_in": bool(u.blinkit_access_token),
         "direct_login_available": blinkit_direct_login_available(),
-        "access_token": u.blinkit_access_token,
         "user_id": u.id,
         "user_name": u.name
     }, status=status.HTTP_200_OK)
