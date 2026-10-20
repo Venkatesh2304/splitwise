@@ -200,7 +200,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
               Blinkit Orders ({currentUser?.name || 'Synced'})
             </span>
             <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-              {isLoggedIn ? '🌐 Live from Blinkit' : '⚡ Synced via Chrome Extension'}
+              {!directLoginAvailable ? '⚡ Sync via Chrome extension' : (isLoggedIn ? '🌐 Live from Blinkit' : '⚡ Synced via Chrome Extension')}
             </span>
           </div>
         </div>
@@ -306,7 +306,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
         </div>
       )}
 
-      {statusInfo && !isLoggedIn && !directLoginAvailable && (
+      {statusInfo && !directLoginAvailable && (
         <div className="card" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
           <h4 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#ffffff', marginBottom: '0.35rem' }}>
             Sync with the Chrome extension
