@@ -16,7 +16,7 @@ export default function GroceriesIntegrationView({ groceriesGroup, currentUser, 
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
         >
           <ShoppingCart size={15} color="#fc8019" />
-          <span>Swiggy Instamart 🛒</span>
+          <span>Swiggy 🛒</span>
         </button>
         <button
           className={`tab-btn ${platform === 'blinkit' ? 'active' : ''}`}

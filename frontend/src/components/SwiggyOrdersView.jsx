@@ -9,6 +9,7 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isCached, setIsCached] = useState(false);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
   const [authUrl, setAuthUrl] = useState('');
 
   // Selected order for splitting
@@ -33,6 +34,7 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
       const statusRes = await fetch(`${API_BASE_URL}/swiggy/status/?user_id=${encodeURIComponent(activeUserId)}`);
       const statusData = await statusRes.json();
       setStatusInfo(statusData);
+      setNeedsReconnect(Boolean(statusData.needs_reconnect));
 
       if (statusData.is_logged_in) {
         const url = forceRefresh 
@@ -42,22 +44,12 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
         const ordersRes = await fetch(url);
         const ordersData = await ordersRes.json();
         if (ordersRes.ok) {
-          const rawOrders = ordersData.orders || [];
-          const sorted = [...rawOrders].sort((a, b) => {
-            const parseDate = (d) => {
-              if (!d || d === 'Recently') return 0;
-              const p = Date.parse(d);
-              return isNaN(p) ? 0 : p;
-            };
-            const timeA = parseDate(a.placed_at);
-            const timeB = parseDate(b.placed_at);
-            if (timeA !== timeB) return timeB - timeA;
-            return String(b.order_id || '').localeCompare(String(a.order_id || ''), undefined, { numeric: true });
-          });
-          setOrders(sorted);
+          // The backend already returns Instamart and food merged and date-sorted.
+          setOrders(ordersData.orders || []);
           setIsCached(Boolean(ordersData.cached));
+          setNeedsReconnect(Boolean(ordersData.needs_reconnect));
         } else {
-          setError(ordersData.error || 'Failed to fetch Swiggy Instamart orders.');
+          setError(ordersData.error || 'Failed to fetch Swiggy orders.');
         }
       }
     } catch (err) {
@@ -70,16 +62,16 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
 
   useEffect(() => {
     fetchStatusAndOrders(false);
-  }, []);
+  }, [currentUser?.id]);
 
-  const handleRemoveSplit = async (orderId) => {
+  const handleRemoveSplit = async (orderId, orderType) => {
     if (!window.confirm(`Remove split for order #${orderId} from Groceries group?`)) return;
     try {
       setActionLoadingId(orderId);
       const res = await fetch(`${API_BASE_URL}/swiggy/remove_split/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_id: String(orderId), actor_id: currentUser?.id })
+        body: JSON.stringify({ order_id: String(orderId), actor_id: currentUser?.id, platform: orderType || 'INSTAMART' })
       });
 
       if (res.ok) {
@@ -199,11 +191,11 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
           <ShoppingCart size={18} color="#fc8019" />
           <div>
             <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#ffffff', display: 'block', lineHeight: 1.2 }}>
-              {isLoggedIn ? `Swiggy Instamart (${statusInfo.user_id || 'Connected'})` : 'Connect Swiggy Instamart'}
+              {isLoggedIn ? `Swiggy (${statusInfo.user_id || 'Connected'})` : 'Connect Swiggy'}
             </span>
             {isLoggedIn && (
               <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-                {isCached ? '⚡ Cached (Instant)' : '🌐 Live Sync'}
+                {needsReconnect ? '⚠️ Session expired — showing saved orders' : (isCached ? '⚡ Cached (Instant)' : '🌐 Live Sync')}
               </span>
             )}
           </div>
@@ -312,10 +304,31 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
         </div>
       )}
 
+      {needsReconnect && (
+        <div className="card" style={{ padding: '0.9rem 1rem', marginBottom: '1rem', border: '1px solid rgba(245, 158, 11, 0.45)', backgroundColor: 'rgba(245, 158, 11, 0.06)' }}>
+          <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f59e0b', marginBottom: '0.25rem' }}>
+            Swiggy session expired
+          </div>
+          <p style={{ fontSize: '0.775rem', color: 'var(--text-dim)', margin: '0 0 0.6rem' }}>
+            Swiggy sessions last about 5 days. The orders below are the ones already saved —
+            reconnect to pull anything new.
+          </p>
+          <a
+            href={authUrl || defaultAuthUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-sm"
+            style={{ backgroundColor: '#fc8019', color: '#ffffff', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.9rem' }}
+          >
+            Reconnect Swiggy
+          </a>
+        </div>
+      )}
+
       {/* Loading state */}
       {loading && orders.length === 0 && (
         <div className="card" style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)' }}>
-          <p style={{ fontSize: '0.85rem' }}>Loading Swiggy Instamart orders...</p>
+          <p style={{ fontSize: '0.85rem' }}>Loading Swiggy orders...</p>
         </div>
       )}
 
@@ -337,13 +350,15 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
       {/* Swiggy Orders List */}
       {!loading && orders.length === 0 && isLoggedIn && (
         <div className="card" style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)' }}>
-          <p style={{ fontSize: '0.85rem' }}>No recent Swiggy Instamart orders found.</p>
+          <p style={{ fontSize: '0.85rem' }}>No recent Swiggy orders found.</p>
         </div>
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         {orders.map((order) => {
           const isSplit = Boolean(order.is_split);
+          const isFood = String(order.order_type || '').toUpperCase() === 'SWIGGY_FOOD';
+          const restaurantName = order.restaurant_name || order.full_order_json?.restaurant_name || '';
           const total = parseFloat(order.total_amount) || 0;
           const { date, time } = formatDateTime(order.placed_at);
           const items = order.item_details || [];
@@ -361,8 +376,19 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
             >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
                 <div>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#ffffff' }}>
-                    Swiggy Order #{order.order_id}
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                    <span style={{
+                      fontSize: '0.6rem',
+                      fontWeight: 700,
+                      letterSpacing: '0.03em',
+                      padding: '0.1rem 0.35rem',
+                      borderRadius: 'var(--radius-sm)',
+                      color: isFood ? '#f59e0b' : '#10b981',
+                      backgroundColor: isFood ? 'rgba(245, 158, 11, 0.12)' : 'rgba(16, 185, 129, 0.12)'
+                    }}>
+                      {isFood ? 'FOOD' : 'INSTAMART'}
+                    </span>
+                    <span>{isFood && restaurantName ? restaurantName : `Order #${order.order_id}`}</span>
                   </div>
                   <div style={{ fontSize: '0.725rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
                     {date} {time && `• ${time}`}
@@ -407,7 +433,7 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
                   {isSplit && (
                     <button
                       className="btn btn-secondary btn-sm"
-                      onClick={() => handleRemoveSplit(order.order_id)}
+                      onClick={() => handleRemoveSplit(order.order_id, order.order_type)}
                       disabled={actionLoadingId === order.order_id}
                       style={{ padding: '0.25rem 0.5rem', fontSize: '0.725rem' }}
                       title="Remove from group"
@@ -418,7 +444,7 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
 
                   <button
                     className={`btn btn-sm ${isSplit ? 'btn-secondary' : 'btn-primary'}`}
-                    onClick={() => setSelectedOrderForSplit({ ...order, order_type: 'SWIGGY' })}
+                    onClick={() => setSelectedOrderForSplit({ ...order, order_type: order.order_type || 'INSTAMART' })}
                     style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
                   >
                     <Zap size={13} />

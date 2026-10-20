@@ -85,3 +85,61 @@ def get_swiggy_order_cache(phone_number=None):
     return SWIGGY_ORDER_CACHES[phone_clean]
 
 CACHE_TTL_SECONDS = 600
+
+# Swiggy food orders are a separate platform with its own ids, so they get their own
+# cache bucket rather than sharing the Instamart one.
+SWIGGY_FOOD_ORDER_CACHES = {}
+
+
+def get_swiggy_food_order_cache(phone_number=None):
+    phone_clean = str(phone_number or "6382247549").strip()
+    if phone_clean not in SWIGGY_FOOD_ORDER_CACHES:
+        SWIGGY_FOOD_ORDER_CACHES[phone_clean] = {
+            "timestamp": 0,
+            "data": None
+        }
+    return SWIGGY_FOOD_ORDER_CACHES[phone_clean]
+
+
+# Whether Blinkit's Cloudflare is currently blocking this host's IP. Datacenter IPs
+# get blocked; a home connection usually isn't. Detected passively, as a by-product of
+# calls the app already makes, so nothing extra is ever requested just to find out.
+BLINKIT_BLOCK_STATE = {"blocked_at": 0.0, "status": None}
+BLINKIT_BLOCK_TTL_SECONDS = 6 * 3600
+
+
+def mark_blinkit_blocked(status_code=403):
+    import time as _time
+    BLINKIT_BLOCK_STATE["blocked_at"] = _time.time()
+    BLINKIT_BLOCK_STATE["status"] = status_code
+
+
+def mark_blinkit_reachable():
+    BLINKIT_BLOCK_STATE["blocked_at"] = 0.0
+    BLINKIT_BLOCK_STATE["status"] = None
+
+
+def blinkit_direct_login_available():
+    """False when Blinkit is blocking this host, so the UI can hide a login that
+    cannot succeed and point at the Chrome extension instead."""
+    import os as _os
+    import time as _time
+    if _os.environ.get("BLINKIT_DIRECT_LOGIN", "").strip() == "0":
+        return False
+    blocked_at = BLINKIT_BLOCK_STATE.get("blocked_at") or 0.0
+    if not blocked_at:
+        return True
+    return (_time.time() - blocked_at) > BLINKIT_BLOCK_TTL_SECONDS
+
+
+def looks_like_cloudflare_block(res):
+    """Blinkit fronts with Cloudflare; a block is a 403 with a challenge page."""
+    try:
+        if res.status_code != 403:
+            return False
+        if "cf-mitigated" in {k.lower() for k in res.headers.keys()}:
+            return True
+        body = (res.text or "")[:4000].lower()
+        return "you have been blocked" in body or "cf_chl" in body or "attention required" in body
+    except Exception:
+        return False
