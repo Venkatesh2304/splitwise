@@ -91,7 +91,7 @@ export function getExpenseSource(exp) {
       label = 'Blinkit';
     } else if (/swiggy/i.test(platform)) {
       type = 'SWIGGY';
-      label = 'Swiggy Instamart';
+      label = /food/i.test(platform) ? 'Swiggy Food' : 'Swiggy Instamart';
     } else {
       type = 'PLATFORM';
       label = platform;

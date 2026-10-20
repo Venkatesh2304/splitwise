@@ -27,7 +27,12 @@ from apps.groups.models import Group
 from apps.users.models import UserProfile
 from apps.expenses.models import Expense, ExpensePayer, ExpenseShare
 from apps.expenses.grocery_engine import GrocerySplitEngine
+from apps.expenses.grocery_engine.split_engine import order_expense_query
 from apps.expenses.grocery_engine.state import (
+    mark_blinkit_blocked,
+    mark_blinkit_reachable,
+    blinkit_direct_login_available,
+    looks_like_cloudflare_block,
     get_blinkit_session,
     get_blinkit_order_cache,
     CACHE_TTL_SECONDS
@@ -35,6 +40,12 @@ from apps.expenses.grocery_engine.state import (
 from apps.expenses.grocery_engine.order_store import OrderStoreManager
 
 REQ_KEY = "c0e6868e-1180-400c-be51-f473479f1f0a"
+
+BLINKIT_BLOCKED_MESSAGE = (
+    "Blinkit is blocking requests from this server, so signing in here can't work. "
+    "Sync your orders with the Splitwise Blinkit Sync Chrome extension on blinkit.com "
+    "instead \u2014 it runs in your own browser."
+)
 
 def get_user_profile_by_req(request, phone_override=None):
     if phone_override:
@@ -91,7 +102,10 @@ def ensure_blinkit_auth_key(user_profile):
         headers = get_blinkit_api_headers(user_profile, include_auth_key=False)
         url = "https://blinkit.com/v2/accounts/auth_key/"
         res = requests.get(url, headers=headers, impersonate="chrome110", timeout=10)
+        if looks_like_cloudflare_block(res):
+            mark_blinkit_blocked(res.status_code)
         if res.status_code == 200:
+            mark_blinkit_reachable()
             data = res.json()
             auth_key = data.get("auth_key")
             if auth_key:
@@ -335,6 +349,8 @@ def fetch_blinkit_orders_internal(user_profile, force_refresh=False):
                     time.sleep(0.3)
 
         else:
+            if looks_like_cloudflare_block(res):
+                mark_blinkit_blocked(res.status_code)
             print(f"Blinkit API status {res.status_code} for {user_profile.name}")
     except Exception as e:
         print(f"Error fetching Blinkit orders for {user_profile.name}: {e}")
@@ -350,6 +366,7 @@ def blinkit_status(request):
     return Response({
         "phone_number": u.phone_number,
         "is_logged_in": bool(u.blinkit_access_token),
+        "direct_login_available": blinkit_direct_login_available(),
         "access_token": u.blinkit_access_token,
         "user_id": u.id,
         "user_name": u.name
@@ -379,8 +396,11 @@ def blinkit_send_otp(request):
                 return Response({"message": data.get("message") or f"OTP sent to {phone_number} via SMS.", "success": True, "ok": True}, status=status.HTTP_200_OK)
             else:
                 return Response({"error": data.get("message") or "Failed to send OTP.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
+        elif looks_like_cloudflare_block(res):
+            mark_blinkit_blocked(res.status_code)
+            return Response({"error": BLINKIT_BLOCKED_MESSAGE, "blocked": True, "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            return Response({"error": f"Blinkit API error (Status {res.status_code})", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": f"Blinkit refused the sign-in (HTTP {res.status_code}).", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         return Response({"error": str(e), "success": False, "ok": False}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -417,8 +437,11 @@ def blinkit_verify_otp(request):
                 }, status=status.HTTP_200_OK)
             else:
                 return Response({"error": data.get("message") or "Invalid OTP verification code.", "ok": False, "success": False}, status=status.HTTP_400_BAD_REQUEST)
+        elif looks_like_cloudflare_block(res):
+            mark_blinkit_blocked(res.status_code)
+            return Response({"error": BLINKIT_BLOCKED_MESSAGE, "blocked": True, "ok": False, "success": False}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            return Response({"error": f"Blinkit API error (Status {res.status_code})", "ok": False, "success": False}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": f"Blinkit refused the code (HTTP {res.status_code}).", "ok": False, "success": False}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         return Response({"error": str(e), "ok": False, "success": False}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -487,7 +510,7 @@ def blinkit_orders(request):
         for ord_item in orders_list:
             ord_id = str(ord_item.get("order_id", ""))
             existing_exp = Expense.objects.filter(
-                Q(description__icontains=ord_id) | Q(notes__icontains=f'"order_id": "{ord_id}"') | Q(notes__icontains=ord_id)
+                order_expense_query(ord_id, "Blinkit")
             ).first()
             
             ord_copy = dict(ord_item)
@@ -566,5 +589,6 @@ def blinkit_remove_split(request):
     if not order_id:
         return Response({"error": "order_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-    res = GrocerySplitEngine.remove_split(order_id, actor_id=request.data.get("actor_id"))
+    res = GrocerySplitEngine.remove_split(
+        order_id, actor_id=request.data.get("actor_id"), platform_name="Blinkit")
     return Response(res, status=status.HTTP_200_OK)

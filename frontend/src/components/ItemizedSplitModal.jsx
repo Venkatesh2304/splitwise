@@ -11,7 +11,10 @@ export default function ItemizedSplitModal({
   currentUser,
   onSplitSaved
 }) {
-  const isSwiggy = order?.order_type === 'INSTAMART' || (order?.order_id && String(order.order_id).length > 12);
+  // Route by the platform the backend reported. The old rule guessed from order-id
+  // length, which would have sent short food order ids to the Blinkit endpoint.
+  const orderPlatform = String(order?.order_type || '').toUpperCase();
+  const isSwiggy = orderPlatform === 'INSTAMART' || orderPlatform.startsWith('SWIGGY');
   const defaultTitle = useMemo(() => {
     const platName = isSwiggy ? 'Swiggy' : 'Blinkit';
     const items = (order && order.item_details && order.item_details.length > 0)
@@ -209,6 +212,7 @@ export default function ItemizedSplitModal({
         buyer_id: buyerId || (currentUser ? currentUser.id : allMemberIds[0]),
         actor_id: currentUser ? currentUser.id : undefined,
         order_id: String(order.order_id || ''),
+        platform: orderPlatform,
         description: finalDescription,
         placed_at: order.placed_at || '',
         total_amount: totalAmount,

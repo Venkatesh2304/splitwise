@@ -20,6 +20,9 @@ class UserProfile(models.Model):
     # Swiggy MCP Session Fields (Stored per user in DB)
     swiggy_access_token = models.TextField(blank=True, null=True)
     swiggy_refresh_token = models.TextField(blank=True, null=True)
+    # PKCE verifier for the login in flight. In the DB, not in memory, because the
+    # /auth_url and /callback requests can land on different gunicorn workers.
+    swiggy_pkce_verifier = models.CharField(max_length=128, blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
