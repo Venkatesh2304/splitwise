@@ -46,13 +46,23 @@ class SwiggyAuthUrlTests(TestCase):
             username="akash", name="Akash", email="a@example.com", phone_number="6382247549"
         )
 
-    def test_redirect_uri_points_at_the_deployed_app(self):
+    def test_defaults_to_localhost_because_swiggy_whitelists_by_domain(self):
+        # Swiggy refuses a redirect it has not whitelisted ("this client isn't supported
+        # for Swiggy MCP sign-in yet"), and only localhost works without that, so the
+        # default must not be our own domain or sign-in breaks outright.
         res = self.client.get(reverse("swiggy_auth_url"), {"user_id": self.user.id}, **PROD)
         self.assertEqual(res.status_code, 200)
-        # The whole point: no localhost, and no query string to break exact matching.
-        self.assertEqual(res.json()["redirect_uri"], PROD_CALLBACK)
+        self.assertEqual(res.json()["redirect_uri"], "http://localhost:8000/api/swiggy/callback/")
+        self.assertFalse(res.json()["public_callback"])
+        # Identity rides in `state` now, so no query string to break exact matching.
         self.assertNotIn("phone=", res.json()["redirect_uri"])
-        self.assertIn(f"redirect_uri={'https%3A%2F%2Framasplit.duckdns.org%2Fapi%2Fswiggy%2Fcallback%2F'}",
+
+    def test_whitelisted_callback_is_used_when_configured(self):
+        with patch.object(swiggy_views, "SWIGGY_PUBLIC_CALLBACK", PROD_CALLBACK):
+            res = self.client.get(reverse("swiggy_auth_url"), {"user_id": self.user.id}, **PROD)
+        self.assertEqual(res.json()["redirect_uri"], PROD_CALLBACK)
+        self.assertTrue(res.json()["public_callback"])
+        self.assertIn("https%3A%2F%2Framasplit.duckdns.org%2Fapi%2Fswiggy%2Fcallback%2F",
                       res.json()["auth_url"])
 
     def test_each_login_gets_a_fresh_verifier_and_state(self):
@@ -70,8 +80,11 @@ class SwiggyAuthUrlTests(TestCase):
         self.assertNotEqual(first["state"].split(".")[0], self.user.swiggy_oauth_state)
 
     def test_redirect_uri_is_remembered_for_the_exchange(self):
-        self.client.get(reverse("swiggy_auth_url"), {"user_id": self.user.id}, **PROD)
+        with patch.object(swiggy_views, "SWIGGY_PUBLIC_CALLBACK", PROD_CALLBACK):
+            self.client.get(reverse("swiggy_auth_url"), {"user_id": self.user.id}, **PROD)
         self.user.refresh_from_db()
+        # Stored, so the exchange replays the same string even if the config changes
+        # or the callback arrives on a different host.
         self.assertEqual(self.user.swiggy_oauth_redirect_uri, PROD_CALLBACK)
 
 
@@ -80,9 +93,10 @@ class SwiggyCallbackTests(TestCase):
         self.user = UserProfile.objects.create(
             username="akash", name="Akash", email="a@example.com", phone_number="6382247549"
         )
-        self.state = self.client.get(
-            reverse("swiggy_auth_url"), {"user_id": self.user.id}, **PROD
-        ).json()["state"]
+        with patch.object(swiggy_views, "SWIGGY_PUBLIC_CALLBACK", PROD_CALLBACK):
+            self.state = self.client.get(
+                reverse("swiggy_auth_url"), {"user_id": self.user.id}, **PROD
+            ).json()["state"]
         self.user.refresh_from_db()
 
     def test_successful_callback_stores_session_and_returns_to_the_app(self):

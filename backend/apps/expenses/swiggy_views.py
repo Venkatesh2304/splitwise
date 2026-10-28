@@ -379,16 +379,20 @@ def swiggy_logout(request):
 def get_swiggy_redirect_uri(request):
     """Where Swiggy sends the user back after login.
 
-    Derived from the request so the browser comes back to whichever host it is already
-    talking to — prod, UAT and a dev machine all differ, and the app answers on all of
-    them. This used to be a hardcoded localhost URL, which off a dev machine is a dead
-    page: the authorization code landed somewhere nothing was listening, which is why
-    the URL had to be copied out of the address bar by hand.
+    Swiggy matches this against an allowlist keyed on the domain, and only localhost is
+    allowed without being whitelisted first — pointing it at our own HTTPS callback is
+    answered with "this client isn't supported for Swiggy MCP sign-in yet". So the
+    default stays localhost, which means the browser lands on a page nothing is serving
+    and the URL has to be copied back into the app by hand.
 
-    No query string and a trailing slash: Swiggy matches the redirect URI exactly, and
-    an APPEND_SLASH redirect partway through the flow would drop the code.
+    Set SWIGGY_PUBLIC_CALLBACK to our real callback once Swiggy has whitelisted it
+    (https://mcp.swiggy.com/builders/access/) and the round trip closes by itself, with
+    no copying: everything else here already handles it.
+
+    No query string and a trailing slash: the match is exact, and an APPEND_SLASH
+    redirect partway through the flow would drop the code.
     """
-    base = SWIGGY_PUBLIC_CALLBACK or request.build_absolute_uri(reverse("swiggy_callback"))
+    base = SWIGGY_PUBLIC_CALLBACK or "http://localhost:8000/api/swiggy/callback/"
     scheme, netloc, path, _query, _fragment = urlsplit(base)
     if not path.endswith("/"):
         path += "/"
@@ -457,10 +461,13 @@ def swiggy_auth_url(request):
         f"scope=mcp:tools"
     )
     # redirect_uri is echoed back so the deployed value can be checked with one curl.
+    # public_callback tells the UI whether sign-in can complete on its own, or whether
+    # it ends on a dead localhost page the user has to copy back.
     return Response({
         "auth_url": url,
         "redirect_uri": redirect_uri,
         "state": state,
+        "public_callback": bool(SWIGGY_PUBLIC_CALLBACK),
         **swiggy_session_state(u),
     })
 

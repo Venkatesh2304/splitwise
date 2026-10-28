@@ -18,6 +18,7 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
   const [manualJson, setManualJson] = useState('');
   const [syncingJson, setSyncingJson] = useState(false);
   const [authStarting, setAuthStarting] = useState(false);
+  const [awaitingPaste, setAwaitingPaste] = useState(false);
   const [justConnected, setJustConnected] = useState(false);
   const [connectError, setConnectError] = useState(null);
 
@@ -96,8 +97,18 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
       );
       const data = await res.json();
       if (!res.ok || !data.auth_url) throw new Error(data.error || 'Could not start the Swiggy login.');
-      // Same tab, so Swiggy's redirect lands back in the app the user is looking at.
-      window.location.assign(data.auth_url);
+
+      if (data.public_callback) {
+        // Swiggy can return to us directly: same tab, and the redirect lands back here.
+        window.location.assign(data.auth_url);
+        return;
+      }
+      // Swiggy has not whitelisted our callback, so sign-in ends on a page that won't
+      // load and the URL has to come back by hand. New tab, so this one stays open to
+      // paste into.
+      window.open(data.auth_url, '_blank', 'noopener');
+      setAwaitingPaste(true);
+      setAuthStarting(false);
     } catch (err) {
       setConnectError(err.message || 'Could not start the Swiggy login.');
       setAuthStarting(false);
@@ -172,6 +183,7 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
         const res = await fetch(`${API_BASE_URL}/swiggy/callback/?code=${encodeURIComponent(code)}&phone=${encodeURIComponent(phone)}&state=${encodeURIComponent(state)}&ajax=1`, { method: 'GET' });
         if (res.ok) {
           setManualJson('');
+          setAwaitingPaste(false);
           fetchStatusAndOrders(true);
         } else {
           alert('Failed to complete Swiggy OAuth callback');
@@ -218,13 +230,14 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
   // rendered both when signed out and when the session has expired — it used to be
   // reachable only when signed out, which is not the state you get stuck in.
   const manualFallback = (
-    <details style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem', textAlign: 'left' }}>
-      <summary style={{ fontSize: '0.75rem', color: 'var(--text-dim)', cursor: 'pointer' }}>
-        Swiggy sent me to a page that didn't load
+    <details open={awaitingPaste} style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem', textAlign: 'left' }}>
+      <summary style={{ fontSize: '0.75rem', color: awaitingPaste ? '#fc8019' : 'var(--text-dim)', cursor: 'pointer', fontWeight: awaitingPaste ? 700 : 400 }}>
+        {awaitingPaste ? 'Step 2: paste the URL Swiggy sent you to' : 'Finish a sign-in that landed on a blank page'}
       </summary>
       <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', margin: '0.75rem 0', lineHeight: '1.4' }}>
-        Sign-in should return here on its own. If it instead lands on a page that won't load,
-        copy the <strong>entire URL from your browser's address bar</strong> and paste it below.
+        Swiggy hasn't whitelisted this app's address yet, so after you sign in it sends you
+        to a page that won't load. That's expected — copy the{' '}
+        <strong>entire URL from that tab's address bar</strong> and paste it here to finish.
         (Raw JSON orders work here too.)
       </p>
       <textarea
