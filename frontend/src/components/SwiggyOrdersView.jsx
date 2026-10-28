@@ -10,7 +10,6 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
   const [error, setError] = useState(null);
   const [isCached, setIsCached] = useState(false);
   const [needsReconnect, setNeedsReconnect] = useState(false);
-  const [authUrl, setAuthUrl] = useState('');
 
   // Selected order for splitting
   const [selectedOrderForSplit, setSelectedOrderForSplit] = useState(null);
@@ -18,6 +17,9 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
 
   const [manualJson, setManualJson] = useState('');
   const [syncingJson, setSyncingJson] = useState(false);
+  const [authStarting, setAuthStarting] = useState(false);
+  const [justConnected, setJustConnected] = useState(false);
+  const [connectError, setConnectError] = useState(null);
 
   const fetchStatusAndOrders = async (forceRefresh = false) => {
     try {
@@ -25,11 +27,6 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
       setError(null);
 
       const activeUserId = currentUser?.id || '';
-      
-      // Fetch Auth URL & status
-      const authRes = await fetch(`${API_BASE_URL}/swiggy/auth_url/?user_id=${encodeURIComponent(activeUserId)}`);
-      const authData = await authRes.json();
-      setAuthUrl(authData.auth_url || '');
 
       const statusRes = await fetch(`${API_BASE_URL}/swiggy/status/?user_id=${encodeURIComponent(activeUserId)}`);
       const statusData = await statusRes.json();
@@ -63,6 +60,49 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
   useEffect(() => {
     fetchStatusAndOrders(false);
   }, [currentUser?.id]);
+
+  // Swiggy's callback sends the browser back here with one of these set. Read it once,
+  // then take it out of the URL so a reload doesn't replay it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('swiggy_connected');
+    const failed = params.get('swiggy_error');
+    if (!connected && !failed) return;
+
+    if (connected) {
+      setJustConnected(true);
+      fetchStatusAndOrders(true);
+    } else {
+      setConnectError(failed);
+    }
+
+    params.delete('swiggy_connected');
+    params.delete('swiggy_error');
+    const qs = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+  }, []);
+
+  // One path for both Connect and Reconnect. The auth URL is minted at click time on
+  // purpose: each /auth_url/ call replaces the stored PKCE verifier, so a URL captured
+  // when the page loaded can carry a verifier that no longer matches.
+  const startSwiggyLogin = async () => {
+    try {
+      setAuthStarting(true);
+      setConnectError(null);
+      const activeUserId = currentUser?.id || '';
+      const res = await fetch(
+        `${API_BASE_URL}/swiggy/auth_url/?user_id=${encodeURIComponent(activeUserId)}`,
+        { cache: 'no-store' }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.auth_url) throw new Error(data.error || 'Could not start the Swiggy login.');
+      // Same tab, so Swiggy's redirect lands back in the app the user is looking at.
+      window.location.assign(data.auth_url);
+    } catch (err) {
+      setConnectError(err.message || 'Could not start the Swiggy login.');
+      setAuthStarting(false);
+    }
+  };
 
   const handleRemoveSplit = async (orderId, orderType) => {
     if (!window.confirm(`Remove split for order #${orderId} from Groceries group?`)) return;
@@ -117,16 +157,19 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
         // Ignore if not fully encoded
       }
 
-      if (decodedInput.startsWith("http://localhost") || decodedInput.includes("swiggy/callback")) {
+      if (decodedInput.includes("swiggy/callback") || decodedInput.startsWith("http://localhost")) {
         // Handle OOB URL copy-paste
         const queryStr = decodedInput.includes('?') ? decodedInput.split('?')[1] : decodedInput;
         const urlParams = new URLSearchParams(queryStr);
         const code = urlParams.get("code");
         const phone = urlParams.get("phone") || activeUserId;
-        
+        // Forward state too, so the nonce path validates for a URL pasted from a
+        // current-style login.
+        const state = urlParams.get("state") || '';
+
         if (!code) throw new Error("No authorization code found in the pasted URL");
-        
-        const res = await fetch(`${API_BASE_URL}/swiggy/callback/?code=${encodeURIComponent(code)}&phone=${encodeURIComponent(phone)}&ajax=1`, { method: 'GET' });
+
+        const res = await fetch(`${API_BASE_URL}/swiggy/callback/?code=${encodeURIComponent(code)}&phone=${encodeURIComponent(phone)}&state=${encodeURIComponent(state)}&ajax=1`, { method: 'GET' });
         if (res.ok) {
           setManualJson('');
           fetchStatusAndOrders(true);
@@ -170,8 +213,48 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
   };
 
   const isLoggedIn = statusInfo && statusInfo.is_logged_in;
-  const activePhone = currentUser?.phone_number || statusInfo?.phone_number || '6382247549';
-  const defaultAuthUrl = `https://mcp.swiggy.com/auth/authorize?response_type=code&client_id=swiggy-mcp&redirect_uri=${encodeURIComponent(`http://localhost:8000/api/swiggy/callback/?phone=${activePhone}`)}&code_challenge=anMh43oX8zlz5C87l0r9J9XOVaNaKWqDwB0TjTj7fdo&code_challenge_method=S256&state=splitwise_state_123&scope=mcp:tools`;
+
+  // Sign-in should come back on its own now. This stays as the escape hatch, and is
+  // rendered both when signed out and when the session has expired — it used to be
+  // reachable only when signed out, which is not the state you get stuck in.
+  const manualFallback = (
+    <details style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem', textAlign: 'left' }}>
+      <summary style={{ fontSize: '0.75rem', color: 'var(--text-dim)', cursor: 'pointer' }}>
+        Swiggy sent me to a page that didn't load
+      </summary>
+      <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', margin: '0.75rem 0', lineHeight: '1.4' }}>
+        Sign-in should return here on its own. If it instead lands on a page that won't load,
+        copy the <strong>entire URL from your browser's address bar</strong> and paste it below.
+        (Raw JSON orders work here too.)
+      </p>
+      <textarea
+        value={manualJson}
+        onChange={(e) => setManualJson(e.target.value)}
+        placeholder="Paste the callback URL from the address bar, OR raw JSON"
+        style={{
+          width: '100%',
+          minHeight: '100px',
+          padding: '0.5rem',
+          fontSize: '0.75rem',
+          fontFamily: 'monospace',
+          backgroundColor: 'rgba(15, 23, 42, 0.6)',
+          border: '1px solid var(--border-color)',
+          borderRadius: 'var(--radius-sm)',
+          color: 'var(--text-primary)',
+          marginBottom: '0.75rem',
+          resize: 'vertical'
+        }}
+      />
+      <button
+        className="btn btn-sm"
+        onClick={handleManualSync}
+        disabled={syncingJson || !manualJson.trim()}
+        style={{ width: '100%', justifyContent: 'center' }}
+      >
+        {syncingJson ? 'Syncing...' : 'Finish sign-in / Sync orders'}
+      </button>
+    </details>
+  );
 
 
   return (
@@ -242,16 +325,38 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
         </div>
       </div>
 
+      {justConnected && (
+        <div className="card" style={{ padding: '0.9rem 1rem', marginBottom: '1rem', border: '1px solid rgba(16, 185, 129, 0.45)', backgroundColor: 'rgba(16, 185, 129, 0.06)' }}>
+          <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-positive, #10b981)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <CheckCircle2 size={15} />
+            <span>Swiggy connected — syncing your orders</span>
+          </div>
+        </div>
+      )}
+
+      {connectError && (
+        <div className="card" style={{ padding: '0.9rem 1rem', marginBottom: '1rem', border: '1px solid var(--color-negative)', backgroundColor: 'rgba(239, 68, 68, 0.08)' }}>
+          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-negative)', marginBottom: '0.2rem' }}>
+            Swiggy login didn't complete
+          </div>
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', margin: 0 }}>
+            {connectError === 'exchange_failed' && 'Swiggy refused to complete the sign-in. Try again, and if it keeps failing the redirect URL may need allowlisting.'}
+            {connectError === 'bad_state' && 'That sign-in had already been used or expired. Start a fresh one.'}
+            {connectError === 'no_code' && 'Swiggy sent us back without an authorization code. Try again.'}
+            {!['exchange_failed', 'bad_state', 'no_code'].includes(connectError) && connectError}
+          </p>
+        </div>
+      )}
+
       {/* OAuth Login Link Banner */}
       {!isLoggedIn && (
         <div className="card" style={{ marginBottom: '1rem', padding: '1.25rem', textAlign: 'center' }}>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem', lineHeight: '1.4' }}>
             Authenticate via Swiggy's official MCP OAuth 2.0 portal to sync your live Instamart order history.
           </p>
-          <a
-            href={authUrl || defaultAuthUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            onClick={startSwiggyLogin}
+            disabled={authStarting}
             className="btn btn-sm"
             style={{
               backgroundColor: '#fc8019',
@@ -262,45 +367,16 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
               padding: '0.45rem 1rem',
               fontSize: '0.85rem',
               fontWeight: 600,
-              textDecoration: 'none',
+              border: 'none',
+              cursor: authStarting ? 'default' : 'pointer',
               marginBottom: '1.5rem'
             }}
           >
-            <span>Connect Swiggy MCP OAuth</span>
+            <span>{authStarting ? 'Opening Swiggy…' : 'Connect Swiggy MCP OAuth'}</span>
             <ExternalLink size={14} />
-          </a>
+          </button>
 
-          <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.75rem', lineHeight: '1.4' }}>
-              <strong>Localhost Workaround:</strong> If the OAuth flow redirects to a broken <code>http://localhost...</code> page, copy the <strong>entire URL from your browser's address bar</strong> and paste it below. (Or paste raw JSON orders).
-            </p>
-            <textarea
-              value={manualJson}
-              onChange={(e) => setManualJson(e.target.value)}
-              placeholder="Paste http://localhost:8000/api/swiggy/callback/?phone=... OR raw JSON"
-              style={{
-                width: '100%',
-                minHeight: '100px',
-                padding: '0.5rem',
-                fontSize: '0.75rem',
-                fontFamily: 'monospace',
-                backgroundColor: 'rgba(15, 23, 42, 0.6)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-sm)',
-                color: 'var(--text-primary)',
-                marginBottom: '0.75rem',
-                resize: 'vertical'
-              }}
-            />
-            <button
-              className="btn btn-sm"
-              onClick={handleManualSync}
-              disabled={syncingJson || !manualJson.trim()}
-              style={{ width: '100%', justifyContent: 'center' }}
-            >
-              {syncingJson ? 'Syncing...' : 'Sync Orders via JSON'}
-            </button>
-          </div>
+          {manualFallback}
         </div>
       )}
 
@@ -313,15 +389,15 @@ export default function SwiggyOrdersView({ groceriesGroup, currentUser, onExpens
             Swiggy sessions last about 5 days. The orders below are the ones already saved —
             reconnect to pull anything new.
           </p>
-          <a
-            href={authUrl || defaultAuthUrl}
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            onClick={startSwiggyLogin}
+            disabled={authStarting}
             className="btn btn-sm"
-            style={{ backgroundColor: '#fc8019', color: '#ffffff', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.9rem' }}
+            style={{ backgroundColor: '#fc8019', color: '#ffffff', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem 0.9rem', border: 'none', cursor: authStarting ? 'default' : 'pointer' }}
           >
-            Reconnect Swiggy
-          </a>
+            {authStarting ? 'Opening Swiggy…' : 'Reconnect Swiggy'}
+          </button>
+          {manualFallback}
         </div>
       )}
 

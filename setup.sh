@@ -10,6 +10,11 @@ BACKEND_SERVICE_PATH="/etc/systemd/system/$BACKEND_SERVICE"
 FRONTEND_SERVICE="splitwise_frontend.service"
 FRONTEND_SERVICE_PATH="/etc/systemd/system/$FRONTEND_SERVICE"
 
+SWIGGY_REFRESH_SERVICE="splitwise_swiggy_refresh.service"
+SWIGGY_REFRESH_SERVICE_PATH="/etc/systemd/system/$SWIGGY_REFRESH_SERVICE"
+SWIGGY_REFRESH_TIMER="splitwise_swiggy_refresh.timer"
+SWIGGY_REFRESH_TIMER_PATH="/etc/systemd/system/$SWIGGY_REFRESH_TIMER"
+
 echo "==> [setup.sh] Repairing dpkg if needed..."
 sudo dpkg --configure -a || true
 
@@ -86,10 +91,46 @@ PrivateTmp=true
 WantedBy=multi-user.target
 EOF
 
+# Swiggy cannot refresh an access token once it has expired, so the refresh has to
+# happen first. Daily against a 5-day token leaves several chances to recover from a
+# failed run before the session is lost.
+echo "==> [setup.sh] Creating Swiggy token refresh timer: $SWIGGY_REFRESH_SERVICE"
+sudo bash -c "cat > '$SWIGGY_REFRESH_SERVICE_PATH'" <<EOF
+[Unit]
+Description=Refresh Swiggy MCP tokens before they expire
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$(whoami)
+Group=$(id -gn)
+WorkingDirectory=$PROJECT_DIR/backend
+Environment=PATH=$VENV_DIR/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=$VENV_DIR/bin/python manage.py refresh_swiggy_tokens
+PrivateTmp=true
+NoNewPrivileges=true
+EOF
+
+sudo bash -c "cat > '$SWIGGY_REFRESH_TIMER_PATH'" <<EOF
+[Unit]
+Description=Daily Swiggy MCP token refresh
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 echo "==> [setup.sh] Reloading systemd & enabling services..."
 sudo systemctl daemon-reload
 sudo systemctl enable "$BACKEND_SERVICE" "$FRONTEND_SERVICE"
 sudo systemctl restart "$BACKEND_SERVICE" "$FRONTEND_SERVICE"
+sudo systemctl enable --now "$SWIGGY_REFRESH_TIMER"
 
 echo "==> ✅ Splitwise Server Setup complete."
 sudo systemctl status "$BACKEND_SERVICE" "$FRONTEND_SERVICE" --no-pager || true
+sudo systemctl list-timers "$SWIGGY_REFRESH_TIMER" --no-pager || true
