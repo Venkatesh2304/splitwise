@@ -1,0 +1,15 @@
+[Unit]
+Description=Snapshot the Splitwise production database
+
+[Service]
+Type=oneshot
+User=rama
+Group=rama
+ExecStart=/opt/splitwise/backup/backup.sh daily
+ProtectSystem=strict
+ReadWritePaths=/var/backups/splitwise
+# Reading is enough for the snapshot, unless the database is mid-write in WAL
+# mode, when SQLite needs its -shm file, so the backend directory stays writable.
+ReadWritePaths=/opt/splitwise/backend
+ProtectHome=true
+NoNewPrivileges=true
