@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Splitwise database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30
+# Run on the next boot if the server was off at 03:30.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
