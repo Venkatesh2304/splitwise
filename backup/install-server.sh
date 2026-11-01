@@ -7,7 +7,7 @@ set -euo pipefail
 DIR=/opt/splitwise/backup
 BACKUPS=/var/backups/splitwise
 
-# rama writes the snapshots; the ubuntu group can read them so the Mac can pull.
+# rama writes the snapshots; the ubuntu group can read them.
 install -d -o rama -g ubuntu -m 2750 "$BACKUPS"
 chmod 755 "$DIR/backup.sh"
 
