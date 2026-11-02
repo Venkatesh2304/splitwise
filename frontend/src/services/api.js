@@ -90,6 +90,8 @@ export const api = {
   }),
 
   // Expenses (actor_id = who is making the change; they aren't notified about it)
+  // The saved grocery order behind an expense, whoever's account it came from
+  getOrderForExpense: (expenseId) => request(`/grocery/order_for_expense/${expenseId}/`),
   createExpense: (expenseData) => request('/expenses/', { method: 'POST', body: expenseData }),
   updateExpense: (id, expenseData) => request(`/expenses/${id}/`, { method: 'PUT', body: expenseData }),
   deleteExpense: (id, actorId) => request(`/expenses/${id}/${withActor(actorId)}`, { method: 'DELETE' }),

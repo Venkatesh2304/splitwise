@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.exceptions import NotFound
 from curl_cffi import requests
 
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
@@ -25,9 +26,10 @@ def resolve_blinkit_placed_at(placed_str):
 from django.db.models import Q
 from apps.groups.models import Group
 from apps.users.models import UserProfile
-from apps.expenses.models import Expense, ExpensePayer, ExpenseShare
+from apps.users.phone import normalize_phone
+from apps.expenses.models import Expense, ExpensePayer, ExpenseShare, GroceryOrderRecord
 from apps.expenses.grocery_engine import GrocerySplitEngine
-from apps.expenses.grocery_engine.split_engine import order_expense_query
+from apps.expenses.grocery_engine.split_engine import existing_split_for, RECORD_PLATFORM_BY_LABEL
 from apps.expenses.grocery_engine.state import (
     mark_blinkit_blocked,
     mark_blinkit_reachable,
@@ -47,9 +49,19 @@ BLINKIT_BLOCKED_MESSAGE = (
     "instead \u2014 it runs in your own browser."
 )
 
+def find_user_by_phone(raw_phone):
+    phone = normalize_phone(raw_phone)
+    if not phone:
+        return None
+    # Stored numbers predate normalizing, so compare in the same shape
+    for u in UserProfile.objects.exclude(phone_number=''):
+        if normalize_phone(u.phone_number) == phone:
+            return u
+    return None
+
 def get_user_profile_by_req(request, phone_override=None):
     if phone_override:
-        u = UserProfile.objects.filter(phone_number=str(phone_override).strip()).first()
+        u = find_user_by_phone(phone_override)
         if u: return u
 
     user_id = request.headers.get("X-User-Id") or request.query_params.get("user_id") or request.data.get("user_id")
@@ -59,8 +71,14 @@ def get_user_profile_by_req(request, phone_override=None):
 
     phone = request.headers.get("X-Phone-Number") or request.query_params.get("phone") or request.query_params.get("phone_number") or request.data.get("phone") or request.data.get("phone_number")
     if phone:
-        u = UserProfile.objects.filter(phone_number=str(phone).strip()).first()
+        u = find_user_by_phone(phone)
         if u: return u
+
+    # Someone was named but isn't here. Saving their orders under Venkatesh (the old
+    # fallback) is how Anish's Blinkit sync ended up in Venkatesh's account.
+    if user_id or phone:
+        shown = normalize_phone(phone) or phone or f"id {user_id}"
+        raise NotFound(f"No Splitwise user has phone {shown}. Save that number in your Blinkit or Swiggy login on the site first.")
 
     return UserProfile.objects.filter(username="venkatesh").first()
 
@@ -375,10 +393,10 @@ def blinkit_status(request):
 def blinkit_send_otp(request):
     u = get_user_profile_by_req(request)
     raw_phone = request.data.get("phone_number") or request.data.get("phone") or u.phone_number
-    phone_number = str(raw_phone).strip()
+    phone_number = normalize_phone(raw_phone)
 
-    if not phone_number or len(phone_number) < 10:
-        return Response({"error": "Invalid 10-digit mobile number.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
+    if not phone_number:
+        return Response({"error": "Enter a 10-digit mobile number.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
 
     u.phone_number = phone_number
     u.save()
@@ -406,7 +424,9 @@ def blinkit_send_otp(request):
 @api_view(['POST'])
 def blinkit_verify_otp(request):
     u = get_user_profile_by_req(request)
-    phone_number = u.phone_number or "6382247549"
+    phone_number = normalize_phone(u.phone_number)
+    if not phone_number:
+        return Response({"error": "Send the OTP to your number first.", "ok": False, "success": False}, status=status.HTTP_400_BAD_REQUEST)
     otp = str(request.data.get("otp") or request.data.get("code") or "").strip()
     
     if not otp:
@@ -494,8 +514,8 @@ def blinkit_sync_manual(request):
 
 @api_view(['GET'])
 def blinkit_orders(request):
+    u = get_user_profile_by_req(request)
     try:
-        u = get_user_profile_by_req(request)
         force_refresh = request.query_params.get("refresh") == "true"
         if force_refresh and not u.blinkit_access_token:
             return Response({
@@ -508,36 +528,9 @@ def blinkit_orders(request):
         output_orders = []
         for ord_item in orders_list:
             ord_id = str(ord_item.get("order_id", ""))
-            existing_exp = Expense.objects.filter(
-                order_expense_query(ord_id, "Blinkit")
-            ).first()
-            
             ord_copy = dict(ord_item)
-            if existing_exp:
-                ord_copy["is_split"] = True
-                parsed_notes = None
-                if existing_exp.notes:
-                    try:
-                        parsed_notes = json.loads(existing_exp.notes)
-                    except Exception:
-                        pass
-                
-                split_mode_val = "ITEMIZED"
-                items_saved = []
-                if isinstance(parsed_notes, dict):
-                    split_mode_val = parsed_notes.get("split_mode", "ITEMIZED")
-                    items_saved = parsed_notes.get("items", [])
-                elif isinstance(parsed_notes, list):
-                    items_saved = parsed_notes
-
-                ord_copy["existing_split"] = {
-                    "expense_id": existing_exp.id,
-                    "split_mode": split_mode_val,
-                    "notes_items": items_saved
-                }
-            else:
-                ord_copy["is_split"] = False
-                ord_copy["existing_split"] = None
+            ord_copy["existing_split"] = existing_split_for(ord_id, "Blinkit")
+            ord_copy["is_split"] = ord_copy["existing_split"] is not None
 
             output_orders.append(ord_copy)
 
@@ -591,3 +584,36 @@ def blinkit_remove_split(request):
     res = GrocerySplitEngine.remove_split(
         order_id, actor_id=request.data.get("actor_id"), platform_name="Blinkit")
     return Response(res, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+def grocery_order_for_expense(request, expense_id):
+    """The saved order behind a grocery expense, so it can be re-split from the group.
+
+    Looks across everyone's orders: the person re-splitting is often not the one
+    whose account placed the order.
+    """
+    expense = Expense.objects.filter(id=expense_id).first()
+    if not expense:
+        return Response({"error": "No such expense."}, status=status.HTTP_404_NOT_FOUND)
+    try:
+        notes = json.loads(expense.notes or "")
+    except ValueError:
+        notes = None
+    if not isinstance(notes, dict) or not notes.get("order_id"):
+        return Response({"error": "This expense isn't a grocery order."}, status=status.HTTP_404_NOT_FOUND)
+
+    order_id = str(notes["order_id"])
+    platform_name = notes.get("platform")
+    records = GroceryOrderRecord.objects.filter(order_id=order_id)
+    record_platform = RECORD_PLATFORM_BY_LABEL.get(platform_name)
+    if record_platform:
+        records = records.filter(platform=record_platform)
+    record = records.order_by('-id').first()
+    if not record:
+        return Response({"error": "This order isn't saved any more. Sync it again from Quick Grocery Apps."}, status=status.HTTP_404_NOT_FOUND)
+
+    order = record.to_dict()
+    order["existing_split"] = existing_split_for(order_id, platform_name)
+    order["is_split"] = order["existing_split"] is not None
+    return Response(order, status=status.HTTP_200_OK)

@@ -139,6 +139,43 @@ def order_expense_query(order_id, platform_name=None) -> Q:
     return q
 
 
+# Where each saved order lives (GroceryOrderRecord.platform), by the platform name
+# written into a split expense's notes
+RECORD_PLATFORM_BY_LABEL = {
+    "Blinkit": "BLINKIT",
+    "Swiggy Instamart": "INSTAMART",
+    "Swiggy Food": "SWIGGY_FOOD",
+}
+
+
+def existing_split_for(order_id, platform_name=None) -> Optional[Dict[str, Any]]:
+    """The group expense an order was split into, in the shape the split window reads."""
+    existing_exp = Expense.objects.filter(order_expense_query(order_id, platform_name)).first()
+    if not existing_exp:
+        return None
+
+    parsed_notes = None
+    if existing_exp.notes:
+        try:
+            parsed_notes = json.loads(existing_exp.notes)
+        except Exception:
+            pass
+
+    split_mode_val = "ITEMIZED"
+    items_saved = []
+    if isinstance(parsed_notes, dict):
+        split_mode_val = parsed_notes.get("split_mode", "ITEMIZED")
+        items_saved = parsed_notes.get("items", [])
+    elif isinstance(parsed_notes, list):
+        items_saved = parsed_notes
+
+    return {
+        "expense_id": existing_exp.id,
+        "split_mode": split_mode_val,
+        "notes_items": items_saved
+    }
+
+
 class GrocerySplitEngine:
     """Universal Splitting Engine for any Grocery Platform (Blinkit, Swiggy Instamart, Zepto, etc.)."""
 

@@ -28,6 +28,7 @@ urlpatterns = [
     path('api/blinkit/split_order/', blinkit_views.blinkit_split_order, name='blinkit_split_order'),
     path('api/blinkit/remove_split/', blinkit_views.blinkit_remove_split, name='blinkit_remove_split'),
     path('api/blinkit/sync_manual/', blinkit_views.blinkit_sync_manual, name='blinkit_sync_manual'),
+    path('api/grocery/order_for_expense/<int:expense_id>/', blinkit_views.grocery_order_for_expense, name='grocery_order_for_expense'),
 
     # Swiggy Instamart API endpoints
     path('api/swiggy/status/', swiggy_views.swiggy_status, name='swiggy_status'),

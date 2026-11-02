@@ -3,6 +3,7 @@ import { api } from '../services/api';
 import { useUser } from '../context/UserContext';
 import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight, Sparkles } from 'lucide-react';
 import GroupSummary from './GroupSummary';
+import ItemizedSplitModal from './ItemizedSplitModal';
 import { canOpenUpiApp, upiPayLink } from '../utils/upi';
 import { getExpenseProducts, getExpenseSource, calculateItemBreakdown } from '../utils/products';
 
@@ -161,6 +162,8 @@ export default function GroupDetailView({
   const [filterPerson, setFilterPerson] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [nudgeState, setNudgeState] = useState({});   // "debtor-creditor" -> message
+  const [resplitOrder, setResplitOrder] = useState(null); // the grocery order being re-split here
+  const [resplitLoadingId, setResplitLoadingId] = useState(null);
 
   const actorId = (currentUser || activeUser)?.id;
 
@@ -185,6 +188,24 @@ export default function GroupDetailView({
       fetchDetail();
     }
   }, [groupId, refreshToken]);
+
+  // Re-split opens that order's split window right here. If the order isn't saved
+  // any more, fall back to the order lists in Quick Grocery Apps.
+  const handleResplit = async (exp) => {
+    setResplitLoadingId(exp.id);
+    try {
+      const order = await api.getOrderForExpense(exp.id);
+      setSelectedExpenseDetails(null);
+      setResplitOrder(order);
+    } catch (err) {
+      console.error(err);
+      setSelectedExpenseDetails(null);
+      alert("Couldn't find this order's details. Opening Quick Grocery Apps so you can sync it again.");
+      if (onOpenBlinkit) onOpenBlinkit();
+    } finally {
+      setResplitLoadingId(null);
+    }
+  };
 
   // Keep an open detail modal in step with fresh data; open the expense a notification pointed at
   useEffect(() => {
@@ -1153,15 +1174,13 @@ export default function GroupDetailView({
 
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {isGrocerySplit(selectedExpenseDetails) ? (
-                  onOpenBlinkit && (
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => { setSelectedExpenseDetails(null); onOpenBlinkit(); }}
-                      title="Grocery orders are changed with Re-Split in Quick Grocery Apps"
-                    >
-                      Re-split order
-                    </button>
-                  )
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => handleResplit(selectedExpenseDetails)}
+                    disabled={resplitLoadingId === selectedExpenseDetails.id}
+                  >
+                    {resplitLoadingId === selectedExpenseDetails.id ? 'Opening…' : 'Re-split order'}
+                  </button>
                 ) : (
                   onEditExpense && (
                     <button
@@ -1222,6 +1241,17 @@ export default function GroupDetailView({
             </div>
           </div>
         </div>
+      )}
+
+      {resplitOrder && (
+        <ItemizedSplitModal
+          isOpen={Boolean(resplitOrder)}
+          onClose={() => setResplitOrder(null)}
+          order={resplitOrder}
+          groceriesGroup={groupData}
+          currentUser={currentUser || activeUser}
+          onSplitSaved={() => fetchDetail()}
+        />
       )}
     </div>
   );
