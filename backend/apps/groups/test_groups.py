@@ -54,3 +54,57 @@ class SplitwiseAPITests(APITestCase):
 
         simplified = group_res.data['simplified_debts']
         self.assertEqual(len(simplified), 2)
+
+
+class GroupDetailQueryTests(APITestCase):
+    """The group page must not run more queries as the group gains expenses."""
+
+    def setUp(self):
+        self.users = [UserProfile.objects.create(name=f"U{i}", email=f"u{i}@test.com") for i in range(4)]
+        self.group = Group.objects.create(name="Groceries", category="HOME")
+        self.group.members.add(*self.users)
+
+    def _add_expenses(self, n):
+        from apps.expenses.models import Expense, ExpensePayer, ExpenseShare, Settlement
+        for i in range(n):
+            e = Expense.objects.create(group=self.group, description=f"Order {i}", amount=40,
+                                       created_by=self.users[0], updated_by=self.users[1])
+            ExpensePayer.objects.create(expense=e, user=self.users[i % 4], amount_paid=40)
+            for u in self.users:
+                ExpenseShare.objects.create(expense=e, user=u, amount_owed=10)
+        Settlement.objects.create(group=self.group, payer=self.users[1], payee=self.users[0],
+                                  amount=5, created_by=self.users[1])
+
+    def _queries_for(self, url):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        with CaptureQueriesContext(connection) as ctx:
+            res = self.client.get(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        return len(ctx.captured_queries), res
+
+    def test_query_count_does_not_grow_with_expenses(self):
+        url = f'/api/groups/{self.group.id}/?user_id={self.users[0].id}'
+        self._add_expenses(3)
+        few, _ = self._queries_for(url)
+        self._add_expenses(30)
+        many, res = self._queries_for(url)
+        self.assertEqual(few, many)
+        self.assertEqual(len(res.data['expenses']), 33)
+        self.assertEqual(len(res.data['expenses'][0]['shares']), 4)
+
+    def test_expense_list_query_count_does_not_grow(self):
+        self._add_expenses(3)
+        few, _ = self._queries_for('/api/expenses/')
+        self._add_expenses(30)
+        many, _ = self._queries_for('/api/expenses/')
+        self.assertEqual(few, many)
+
+    def test_lite_leaves_out_the_lists_but_keeps_balances(self):
+        self._add_expenses(4)
+        _, full = self._queries_for(f'/api/groups/{self.group.id}/')
+        _, lite = self._queries_for(f'/api/groups/{self.group.id}/?lite=1')
+        self.assertNotIn('expenses', lite.data)
+        self.assertNotIn('settlements', lite.data)
+        self.assertEqual(lite.data['net_balances'], full.data['net_balances'])
+        self.assertEqual(lite.data['total_spending'], full.data['total_spending'])
