@@ -5,10 +5,8 @@ import time
 import base64
 import hashlib
 import secrets
-from datetime import datetime, timezone, timedelta
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import quote
 from django.shortcuts import redirect
-from django.urls import reverse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
@@ -33,8 +31,6 @@ MCP_BASE = "https://mcp.swiggy.com"
 # copy-the-localhost-URL workaround.
 SWIGGY_CLIENT_ID = os.environ.get("SWIGGY_CLIENT_ID", "swiggy-mcp")
 SWIGGY_PUBLIC_CALLBACK = os.environ.get("SWIGGY_PUBLIC_CALLBACK", "").strip()
-# Where to send the browser once login finishes. Derived from the request when unset.
-SWIGGY_APP_ROOT = os.environ.get("SWIGGY_APP_ROOT", "").strip()
 
 # Swiggy runs one MCP server per vertical. The vertical is the path, not a field in the
 # payload, so Instamart and food are two separate calls.
@@ -65,98 +61,8 @@ class SwiggyAuthExpired(Exception):
     """The access token is dead and the refresh token could not revive it."""
 
 
-class SwiggyRateLimited(Exception):
-    """Swiggy asked us to slow down. Carries the Retry-After it gave us, in seconds."""
-
-    def __init__(self, retry_after=None):
-        super().__init__(f"Swiggy rate limited (retry after {retry_after}s)")
-        self.retry_after = retry_after
-
-
-def _jwt_claims(token):
-    """The payload of a JWT, without verifying it.
-
-    Only ever used on tokens Swiggy issued to us and we stored ourselves, to read
-    `exp` — so there is nothing to verify and no need for a JWT library.
-    """
-    try:
-        payload = str(token).split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        return json.loads(base64.urlsafe_b64decode(payload))
-    except Exception:
-        return None
-
-
-def swiggy_token_expiry(token):
-    """When this access token dies, as an aware datetime, or None if that's unknowable.
-
-    None means "no idea", never "expired": the MANUAL_JSON_OVERRIDE sentinel and any
-    non-JWT token have to keep counting as usable.
-    """
-    if not token or token == "MANUAL_JSON_OVERRIDE":
-        return None
-    claims = _jwt_claims(token) or {}
-    exp = claims.get("exp")
-    try:
-        return datetime.fromtimestamp(float(exp), tz=timezone.utc)
-    except (TypeError, ValueError):
-        return None
-
-
-def swiggy_expires_at(user_profile):
-    """The stored expiry, falling back to the token's own `exp` for older rows."""
-    return user_profile.swiggy_token_expires_at or swiggy_token_expiry(user_profile.swiggy_access_token)
-
-
-# Refresh this far ahead of expiry. Swiggy cannot refresh an already-dead token, so the
-# margin has to cover the gap between scheduled runs plus any clock skew.
-REFRESH_MARGIN = timedelta(minutes=10)
-
-
-def store_swiggy_tokens(user_profile, data, save=True):
-    """Record a token response. Returns the new access token, or None.
-
-    `expires_in` is what Swiggy documents; the token's own `exp` is the fallback.
-    """
-    access = data.get("access_token")
-    if not access:
-        return None
-
-    user_profile.swiggy_access_token = access
-    # Swiggy rotates the refresh token on every refresh; keep the old one if it doesn't.
-    user_profile.swiggy_refresh_token = data.get("refresh_token") or user_profile.swiggy_refresh_token
-
-    expires_at = None
-    try:
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=float(data["expires_in"]))
-    except (KeyError, TypeError, ValueError):
-        expires_at = swiggy_token_expiry(access)
-    user_profile.swiggy_token_expires_at = expires_at
-
-    if save:
-        user_profile.save()
-    return access
-
-
-def clear_swiggy_session(user_profile, save=True):
-    """Forget the session and anything about a login in flight."""
-    user_profile.swiggy_access_token = None
-    user_profile.swiggy_refresh_token = None
-    user_profile.swiggy_token_expires_at = None
-    user_profile.swiggy_pkce_verifier = None
-    user_profile.swiggy_oauth_state = None
-    user_profile.swiggy_oauth_redirect_uri = None
-    if save:
-        user_profile.save()
-
-
 def refresh_swiggy_token(user_profile):
-    """Swap the refresh token for a new pair. Returns the new access token, or None.
-
-    Swiggy wants this as JSON, not form-encoded. A dead refresh token comes back as
-    `invalid_grant`, which their docs say not to retry — so the session is cleared and
-    the user is asked to reconnect instead of us hammering a token that can't work.
-    """
+    """Swap the refresh token for a new pair. Returns the new access token, or None."""
     if not user_profile.swiggy_refresh_token:
         return None
     try:
@@ -170,48 +76,18 @@ def refresh_swiggy_token(user_profile):
             timeout=10.0,
         )
         if res.status_code == 200:
-            new_access = store_swiggy_tokens(user_profile, res.json())
+            data = res.json()
+            new_access = data.get("access_token")
             if new_access:
+                user_profile.swiggy_access_token = new_access
+                # Swiggy rotates the refresh token; keep the old one if it doesn't.
+                user_profile.swiggy_refresh_token = data.get("refresh_token") or user_profile.swiggy_refresh_token
+                user_profile.save()
                 return new_access
-
-        error = ""
-        try:
-            error = (res.json() or {}).get("error", "")
-        except Exception:
-            pass
-        if error == "invalid_grant":
-            print(f"Swiggy refresh token is dead for {user_profile.name}; reconnect needed.")
-            clear_swiggy_session(user_profile)
-        else:
-            print(f"Swiggy token refresh failed for {user_profile.name}: HTTP {res.status_code} {error}")
+        print(f"Swiggy token refresh failed for {user_profile.name}: HTTP {res.status_code}")
     except Exception as e:
         print(f"Swiggy token refresh error for {user_profile.name}: {e}")
     return None
-
-
-def swiggy_session_state(user_profile):
-    """What the UI needs to know about the session, derived from the stored token.
-
-    Derived rather than remembered: the old auth_error flag lived in a per-process
-    dict, so with three gunicorn workers the request that noticed the expiry was
-    usually not the request that reported it.
-    """
-    token = user_profile.swiggy_access_token
-    manual = token == "MANUAL_JSON_OVERRIDE"
-    expires_at = None if manual else swiggy_expires_at(user_profile)
-    now = datetime.now(timezone.utc)
-
-    # An unknown expiry is not an expired one.
-    is_expired = bool(expires_at and expires_at <= now)
-    stale = bool(expires_at and expires_at - now <= REFRESH_MARGIN)
-    flagged = bool(get_swiggy_order_cache(user_profile.phone_number).get("auth_error"))
-
-    return {
-        "is_logged_in": bool(token) and not is_expired,
-        "needs_reconnect": bool(token) and (stale or flagged),
-        "manual_override": manual,
-        "expires_at": expires_at.isoformat() if expires_at else None,
-    }
 
 
 def swiggy_mcp_call(user_profile, path, tool, arguments=None, timeout=15.0):
@@ -223,13 +99,6 @@ def swiggy_mcp_call(user_profile, path, tool, arguments=None, timeout=15.0):
     token = user_profile.swiggy_access_token
     if not token or token == "MANUAL_JSON_OVERRIDE":
         raise SwiggyAuthExpired("No Swiggy session")
-
-    # Refresh ahead of expiry rather than after a 401: Swiggy cannot refresh a token
-    # that has already died, so waiting for the rejection is waiting too long.
-    expires_at = swiggy_expires_at(user_profile)
-    if expires_at and expires_at - datetime.now(timezone.utc) <= REFRESH_MARGIN:
-        if not refresh_swiggy_token(user_profile) and expires_at <= datetime.now(timezone.utc):
-            raise SwiggyAuthExpired("Swiggy session expired and could not be refreshed")
 
     payload = {
         "jsonrpc": "2.0",
@@ -248,15 +117,12 @@ def swiggy_mcp_call(user_profile, path, tool, arguments=None, timeout=15.0):
 
         if res.status_code == 200:
             body = _decode_mcp_body(res)
-            err_code = (body.get("error") or {}).get("code") if isinstance(body, dict) else None
             # A dead session can also come back as a JSON-RPC error rather than a 401.
+            err_code = (body.get("error") or {}).get("code") if isinstance(body, dict) else None
             if err_code == -32001 and attempt == 1 and refresh_swiggy_token(user_profile):
                 continue
             if err_code == -32001:
                 raise SwiggyAuthExpired("Swiggy session expired")
-            # Likewise a rate limit, which Swiggy surfaces as -32000 at the MCP layer.
-            if err_code == -32000:
-                raise SwiggyRateLimited(_retry_after_seconds(res))
             return body
 
         if res.status_code in (401, 403):
@@ -264,25 +130,10 @@ def swiggy_mcp_call(user_profile, path, tool, arguments=None, timeout=15.0):
                 continue
             raise SwiggyAuthExpired(f"Swiggy session expired (HTTP {res.status_code})")
 
-        # Their docs: 419 means the session was revoked server-side, so a refresh can't
-        # help and only a fresh sign-in will do.
-        if res.status_code == 419:
-            raise SwiggyAuthExpired("Swiggy session was revoked (HTTP 419)")
-
-        if res.status_code == 429:
-            raise SwiggyRateLimited(_retry_after_seconds(res))
-
         print(f"Swiggy MCP error on {path}/{tool}: {res.status_code} {res.text[:200]}")
         return None
 
     return None
-
-
-def _retry_after_seconds(res):
-    try:
-        return int(float(res.headers.get("Retry-After")))
-    except (TypeError, ValueError):
-        return None
 
 
 def _decode_mcp_body(res):
@@ -300,6 +151,8 @@ def _decode_mcp_body(res):
         except Exception:
             pass
     return None
+
+from datetime import datetime, timezone, timedelta
 
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
@@ -336,7 +189,8 @@ def clean_placed_at(status_text, created_at_raw=None):
 def swiggy_status(request):
     u = get_user_profile_by_req(request)
     return Response({
-        **swiggy_session_state(u),
+        "is_logged_in": bool(u.swiggy_access_token),
+        "needs_reconnect": bool(get_swiggy_order_cache(u.phone_number).get("auth_error")),
         "phone_number": u.phone_number,
         "user_id": u.id,
         "user_name": u.name
@@ -367,54 +221,23 @@ def swiggy_verify_otp(request):
 @api_view(['POST'])
 def swiggy_logout(request):
     u = get_user_profile_by_req(request)
-    clear_swiggy_session(u)
+    u.swiggy_access_token = None
+    u.swiggy_refresh_token = None
+    u.save()
 
-    # Both caches, and the stale reconnect flag with them: the food cache used to
-    # survive a logout and keep serving the previous session's orders.
-    for cache in (get_swiggy_order_cache(u.phone_number), get_swiggy_food_order_cache(u.phone_number)):
-        cache["data"] = None
-        cache["auth_error"] = False
-    return Response({"message": f"Logged out from Swiggy for {u.name}."}, status=status.HTTP_200_OK)
+    cache = get_swiggy_order_cache(u.phone_number)
+    cache["data"] = None
+    return Response({"message": f"Logged out from Swiggy Instamart for {u.name}."}, status=status.HTTP_200_OK)
 
-def get_swiggy_redirect_uri(request):
+def get_swiggy_redirect_uri(request, phone):
     """Where Swiggy sends the user back after login.
 
-    Swiggy matches this against an allowlist keyed on the domain, and only localhost is
-    allowed without being whitelisted first — pointing it at our own HTTPS callback is
-    answered with "this client isn't supported for Swiggy MCP sign-in yet". So the
-    default stays localhost, which means the browser lands on a page nothing is serving
-    and the URL has to be copied back into the app by hand.
-
-    Set SWIGGY_PUBLIC_CALLBACK to our real callback once Swiggy has whitelisted it
-    (https://mcp.swiggy.com/builders/access/) and the round trip closes by itself, with
-    no copying: everything else here already handles it.
-
-    No query string and a trailing slash: the match is exact, and an APPEND_SLASH
-    redirect partway through the flow would drop the code.
+    With SWIGGY_PUBLIC_CALLBACK set, the browser returns straight to the app. Without
+    it we fall back to localhost:8000, which off a dev machine means the user has to
+    copy the URL out of the address bar and paste it into the app (the old workaround).
     """
     base = SWIGGY_PUBLIC_CALLBACK or "http://localhost:8000/api/swiggy/callback/"
-    scheme, netloc, path, _query, _fragment = urlsplit(base)
-    if not path.endswith("/"):
-        path += "/"
-    return urlunsplit((scheme, netloc, path, "", ""))
-
-
-def swiggy_frontend_root(request):
-    """The app's own root, to send the browser back to once login is done.
-
-    Behind Caddy the host carries no port and the frontend is served at the root. The
-    dev-port mapping only applies when a port is explicit, so prod never reaches it —
-    it used to be unconditional, which on prod produced a :5001 URL serving nothing.
-    """
-    if SWIGGY_APP_ROOT:
-        return SWIGGY_APP_ROOT if SWIGGY_APP_ROOT.endswith("/") else SWIGGY_APP_ROOT + "/"
-
-    host = request.get_host()
-    hostname, _, port = host.partition(":")
-    frontend_port = {"8000": "5173", "5002": "5001", "5003": "5001"}.get(port)
-    if frontend_port:
-        return f"{request.scheme}://{hostname}:{frontend_port}/"
-    return f"{request.scheme}://{host}/"
+    return f"{base}?phone={phone}"
 
 
 # Fallback for logins started before per-user verifiers existed.
@@ -431,24 +254,16 @@ def _new_pkce_pair():
 @api_view(['GET'])
 def swiggy_auth_url(request):
     u = get_user_profile_by_req(request)
+    phone = u.phone_number or "6382247549"
 
-    redirect_uri = get_swiggy_redirect_uri(request)
+    redirect_uri = get_swiggy_redirect_uri(request, phone)
     # A fresh verifier per login attempt, stored against the user because the callback
     # may be served by a different gunicorn worker than this request.
     verifier, code_challenge = _new_pkce_pair()
-    # The nonce is how the callback knows whose login this is, now that the redirect URI
-    # carries no phone number. Single-use, and checked with a constant-time compare.
-    nonce = secrets.token_urlsafe(16)
-    state = f"{nonce}.{u.id}"
-
     u.swiggy_pkce_verifier = verifier
-    u.swiggy_oauth_state = nonce
-    # Replayed verbatim at token exchange: Swiggy matches it exactly, and this request
-    # and the callback can arrive on different hostnames.
-    u.swiggy_oauth_redirect_uri = redirect_uri
-    u.save(update_fields=[
-        "swiggy_pkce_verifier", "swiggy_oauth_state", "swiggy_oauth_redirect_uri",
-    ])
+    u.save(update_fields=["swiggy_pkce_verifier"])
+
+    state = "splitwise_state_123"
 
     url = (
         f"{MCP_BASE}/auth/authorize?"
@@ -457,66 +272,26 @@ def swiggy_auth_url(request):
         f"redirect_uri={quote(redirect_uri, safe='')}&"
         f"code_challenge={code_challenge}&"
         f"code_challenge_method=S256&"
-        f"state={quote(state, safe='')}&"
+        f"state={state}&"
         f"scope=mcp:tools"
     )
-    # redirect_uri is echoed back so the deployed value can be checked with one curl.
-    # public_callback tells the UI whether sign-in can complete on its own, or whether
-    # it ends on a dead localhost page the user has to copy back.
-    return Response({
-        "auth_url": url,
-        "redirect_uri": redirect_uri,
-        "state": state,
-        "public_callback": bool(SWIGGY_PUBLIC_CALLBACK),
-        **swiggy_session_state(u),
-    })
-
-def _user_from_oauth_state(request):
-    """Whose login this callback belongs to.
-
-    Prefers the `state` nonce minted by swiggy_auth_url. Falls back to the old
-    ?phone=/user_id lookup so a login already in flight across a deploy, and the
-    paste-the-URL box, both still complete.
-    """
-    state = request.query_params.get("state") or request.data.get("state") or ""
-    if "." in state:
-        nonce, _, user_id = state.partition(".")
-        try:
-            u = UserProfile.objects.get(id=int(user_id))
-        except (UserProfile.DoesNotExist, ValueError):
-            return None
-        if not nonce or not secrets.compare_digest(u.swiggy_oauth_state or "", nonce):
-            return None
-        return u
-
-    phone = request.query_params.get("phone") or request.data.get("phone")
-    if phone:
-        return get_user_profile_by_req(request, phone_override=phone)
-    return get_user_profile_by_req(request)
-
+    return Response({"auth_url": url, "is_logged_in": bool(u.swiggy_access_token)})
 
 @api_view(['GET', 'POST'])
 def swiggy_callback(request):
-    is_ajax = request.query_params.get("ajax") == "1"
-
-    def fail(reason, detail=None, http_status=status.HTTP_400_BAD_REQUEST):
-        # A browser landing on a JSON error is just another dead end, so send it back
-        # to the app with a reason it can show. Logged either way.
-        print(f"Swiggy callback failed ({reason}): {detail}")
-        if is_ajax:
-            return Response({"error": reason, "details": detail, "success": False}, status=http_status)
-        return redirect(f"{swiggy_frontend_root(request)}?swiggy_error={quote(reason, safe='')}")
-
-    u = _user_from_oauth_state(request)
-    if u is None:
-        return fail("bad_state", "No login in flight matched this callback.")
-
+    phone = request.query_params.get("phone") or request.data.get("phone")
+    if phone:
+        u = get_user_profile_by_req(request, phone_override=phone)
+    else:
+        u = get_user_profile_by_req(request)
+        
+    phone = u.phone_number or "6382247549"
     code = request.query_params.get("code") or request.data.get("code")
     if not code:
-        return fail("no_code", "No authorization code provided.")
+        return Response({"error": "No authorization code provided."}, status=status.HTTP_400_BAD_REQUEST)
 
-    # The string sent to /auth/authorize, not a fresh guess: Swiggy matches it exactly.
-    redirect_uri = u.swiggy_oauth_redirect_uri or get_swiggy_redirect_uri(request)
+    token_url = f"{MCP_BASE}/auth/token"
+    redirect_uri = get_swiggy_redirect_uri(request, phone)
 
     payload = {
         "grant_type": "authorization_code",
@@ -527,36 +302,32 @@ def swiggy_callback(request):
     }
 
     try:
-        res = requests.post(f"{MCP_BASE}/auth/token", json=payload, timeout=10.0)
-        try:
-            data = res.json()
-        except Exception:
-            data = {}
+        res = requests.post(token_url, json=payload, timeout=10.0)
+        data = res.json()
+        if res.status_code == 200 and data.get("access_token"):
+            u.swiggy_access_token = data.get("access_token")
+            u.swiggy_refresh_token = data.get("refresh_token")
+            u.swiggy_pkce_verifier = None
+            u.save()
+            # A fresh session: clear any stale "reconnect" flag.
+            get_swiggy_order_cache(u.phone_number)["auth_error"] = False
+            
+            # Immediately fetch & sync Swiggy orders
+            fetch_swiggy_orders_internal(u, force_refresh=True)
 
-        if res.status_code != 200 or not data.get("access_token"):
-            # Keep the error, drop the tokens: never log the response wholesale, since a
-            # successful body would contain the access token.
-            return fail("exchange_failed", f"HTTP {res.status_code} {data.get('error', '')} {data.get('error_description', '')}".strip())
+            scheme = request.scheme
+            server_name = request.META.get('HTTP_HOST', 'localhost').split(':')[0]
+            frontend_port = '5001' if str(request.get_port()) == '5002' else '5173'
+            frontend_url = f"{scheme}://{server_name}:{frontend_port}/"
 
-        store_swiggy_tokens(u, data, save=False)
-        u.swiggy_pkce_verifier = None
-        u.swiggy_oauth_state = None
-        u.swiggy_oauth_redirect_uri = None
-        u.save()
+            if request.query_params.get("ajax") == "1":
+                return Response({"message": "Successfully connected", "success": True}, status=status.HTTP_200_OK)
 
-        # A fresh session: clear any stale "reconnect" flag on both caches.
-        get_swiggy_order_cache(u.phone_number)["auth_error"] = False
-        get_swiggy_food_order_cache(u.phone_number)["auth_error"] = False
-
-        if is_ajax:
-            return Response({"message": "Successfully connected", "success": True}, status=status.HTTP_200_OK)
-
-        # Orders are not synced here on purpose: it meant up to ~15 sequential calls
-        # before the browser moved, so login sat on a blank tab. The landing page asks
-        # for a refresh instead, where the wait is visible.
-        return redirect(f"{swiggy_frontend_root(request)}?swiggy_connected=1")
-    except requests.RequestException as e:
-        return fail("exchange_failed", str(e), http_status=status.HTTP_502_BAD_GATEWAY)
+            return redirect(f"{frontend_url}?swiggy_connected=true")
+        else:
+            return Response({"error": "Failed to exchange token", "details": data}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 import re
 
@@ -983,7 +754,7 @@ def fetch_swiggy_orders_internal(user_profile, force_refresh=False):
     if not force_refresh and cache.get("data") and (now - cache.get("timestamp", 0) < CACHE_TTL_SECONDS):
         return cache["data"]
 
-    instamart_rows, auth_expired, rate_limited = None, False, False
+    instamart_rows, auth_expired = None, False
     try:
         body = swiggy_mcp_call(user_profile, IM_PATH, "get_orders", timeout=10.0)
         if body is not None:
@@ -998,23 +769,16 @@ def fetch_swiggy_orders_internal(user_profile, force_refresh=False):
     except SwiggyAuthExpired as e:
         auth_expired = True
         print(f"Swiggy session expired for {user_profile.name}: {e}")
-    except SwiggyRateLimited as e:
-        # Not an auth problem: serve what's stored and let the next refresh try again.
-        rate_limited = True
-        print(f"Swiggy rate limited for {user_profile.name}: {e}")
     except Exception as e:
         print("Error fetching Swiggy Instamart orders:", e)
 
     food_rows = None
-    if not auth_expired and not rate_limited:
+    if not auth_expired:
         try:
             food_rows = fetch_swiggy_food_orders_internal(user_profile, force_refresh=force_refresh)
         except SwiggyAuthExpired as e:
             auth_expired = True
             print(f"Swiggy session expired for {user_profile.name}: {e}")
-        except SwiggyRateLimited as e:
-            rate_limited = True
-            print(f"Swiggy rate limited for {user_profile.name}: {e}")
         except Exception as e:
             print("Error fetching Swiggy food orders:", e)
 
@@ -1096,7 +860,7 @@ def swiggy_orders(request):
     return Response({
         "orders": output_orders,
         "cached": not request.query_params.get("refresh") == "true",
-        "needs_reconnect": swiggy_session_state(u)["needs_reconnect"],
+        "needs_reconnect": bool(get_swiggy_order_cache(u.phone_number).get("auth_error")),
     }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])

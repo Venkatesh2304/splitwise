@@ -18,20 +18,15 @@ import AddMemberToGroupModal from './components/AddMemberToGroupModal';
 
 import { LayoutDashboard, ShoppingBag, ShoppingCart, LogOut, Plus } from 'lucide-react';
 
-// A notification opens /?group=<id>&expense=<id>, and the Swiggy OAuth callback comes
-// back to /?swiggy_connected=1 (or ?swiggy_error=<reason>).
+// A notification opens /?group=<id>&expense=<id>
 function readDeepLink(url) {
   try {
     const params = new URL(url, window.location.origin).searchParams;
     const group = parseInt(params.get('group'), 10);
     const expense = parseInt(params.get('expense'), 10);
-    return {
-      groupId: Number.isNaN(group) ? null : group,
-      expenseId: Number.isNaN(expense) ? null : expense,
-      swiggyReturn: params.has('swiggy_connected') || params.has('swiggy_error'),
-    };
+    return { groupId: Number.isNaN(group) ? null : group, expenseId: Number.isNaN(expense) ? null : expense };
   } catch {
-    return { groupId: null, expenseId: null, swiggyReturn: false };
+    return { groupId: null, expenseId: null };
   }
 }
 
@@ -46,8 +41,7 @@ function AppContent() {
   const [groups, setGroups] = useState([]);
   const [initialLink] = useState(() => readDeepLink(window.location.href));
   const [activeGroupId, setActiveGroupId] = useState(initialLink.groupId);
-  // Coming back from the Swiggy sign-in should land on the screen that started it.
-  const [activeTab, setActiveTab] = useState(initialLink.swiggyReturn ? 'blinkit' : 'dashboard'); // 'dashboard' | 'blinkit'
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'blinkit'
   const [focusExpenseId, setFocusExpenseId] = useState(initialLink.expenseId);
   const [refreshToken, setRefreshToken] = useState(0);
   const [pushState, setPushState] = useState('checking');

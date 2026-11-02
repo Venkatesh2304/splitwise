@@ -52,6 +52,13 @@ else
     echo "No frontend changes detected. Skipping frontend build."
 fi
 
+# Snapshot the database before migrations touch it. Best effort: a missing backup
+# directory (the timer isn't installed yet) must not stop a deploy.
+if [ "$ENVIRONMENT" == "prod" ] && [ -x "$DIR/backup/backup.sh" ]; then
+    echo "Taking a pre-deploy database snapshot..."
+    "$DIR/backup/backup.sh" predeploy || echo "WARNING: pre-deploy snapshot failed; continuing."
+fi
+
 # Run backend migrations
 echo "Running database migrations..."
 cd backend
