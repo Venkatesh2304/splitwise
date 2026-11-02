@@ -57,8 +57,13 @@ class GroupViewSet(viewsets.ModelViewSet):
         from apps.expenses.models import Expense, Settlement
         from apps.expenses.serializers import ExpenseSerializer, SettlementSerializer
 
-        expenses = Expense.objects.filter(group=group).order_by('-date', '-created_at')
-        settlements = Settlement.objects.filter(group=group).order_by('-date', '-created_at')
+        # Load the people on every expense up front; fetching them row by row made this
+        # page run thousands of queries once a group had a few hundred expenses.
+        expenses = (Expense.objects.filter(group=group).order_by('-date', '-created_at')
+                    .select_related('created_by', 'updated_by')
+                    .prefetch_related('payers__user', 'shares__user'))
+        settlements = (Settlement.objects.filter(group=group).order_by('-date', '-created_at')
+                       .select_related('payer', 'payee', 'created_by'))
 
         exp_data_for_engine = []
         for e in expenses:
@@ -84,8 +89,10 @@ class GroupViewSet(viewsets.ModelViewSet):
         data["total_spending"] = calc_result["total_group_spending"]
         data["net_balances"] = net_balances
         data["simplified_debts"] = simplified_debts
-        data["expenses"] = ExpenseSerializer(expenses, many=True).data
-        data["settlements"] = SettlementSerializer(settlements, many=True).data
+        # ?lite=1 is for the dashboard, which only needs the totals and balances
+        if request.query_params.get('lite') != '1':
+            data["expenses"] = ExpenseSerializer(expenses, many=True).data
+            data["settlements"] = SettlementSerializer(settlements, many=True).data
 
         viewer = resolve_actor(request.query_params.get('user_id'))
         if viewer:

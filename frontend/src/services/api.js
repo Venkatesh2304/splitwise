@@ -63,6 +63,8 @@ export const api = {
   // Groups (userId brings back what that person hasn't seen yet)
   getGroups: (userId) => request(`/groups/${forUser(userId)}`),
   getGroupDetail: (id, userId) => request(`/groups/${id}/${forUser(userId)}`),
+  // Totals and balances only, without the expense and settlement lists
+  getGroupBalances: (id) => request(`/groups/${id}/?lite=1`),
   markGroupSeen: (groupId, userId) => request(`/groups/${groupId}/seen/`, {
     method: 'POST',
     body: { user_id: userId }

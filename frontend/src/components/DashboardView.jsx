@@ -90,14 +90,13 @@ export default function DashboardView({ groups, onSelectGroup, onOpenAddGroup, o
     async function loadAllGroupDetails() {
       setLoading(true);
       const details = {};
-      for (const g of groups) {
+      await Promise.all(groups.map(async (g) => {
         try {
-          const detail = await api.getGroupDetail(g.id);
-          details[g.id] = detail;
+          details[g.id] = await api.getGroupBalances(g.id);
         } catch (e) {
           console.error(`Failed to fetch detail for group ${g.id}`, e);
         }
-      }
+      }));
       setGroupDetailsMap(details);
       setLoading(false);
     }
