@@ -7,7 +7,9 @@ from .models import Expense, Settlement
 from .serializers import ExpenseSerializer, SettlementSerializer
 
 class ExpenseViewSet(viewsets.ModelViewSet):
-    queryset = Expense.objects.all().order_by('-date', '-created_at')
+    queryset = (Expense.objects.all().order_by('-date', '-created_at')
+                .select_related('created_by', 'updated_by')
+                .prefetch_related('payers__user', 'shares__user'))
     serializer_class = ExpenseSerializer
 
     def get_queryset(self):
@@ -38,7 +40,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         events.expense_deleted(before, actor)
 
 class SettlementViewSet(viewsets.ModelViewSet):
-    queryset = Settlement.objects.all().order_by('-date', '-created_at')
+    queryset = (Settlement.objects.all().order_by('-date', '-created_at')
+                .select_related('payer', 'payee', 'created_by'))
     serializer_class = SettlementSerializer
 
     def get_queryset(self):
