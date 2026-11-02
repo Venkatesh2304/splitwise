@@ -255,7 +255,9 @@ def _new_pkce_pair():
 @api_view(['GET'])
 def swiggy_auth_url(request):
     u = get_user_profile_by_req(request)
-    phone = u.phone_number or "6382247549"
+    # The phone in the callback address says whose login it is, so never borrow
+    # someone else's number; with none, the pasted callback names the user by id.
+    phone = u.phone_number or ""
 
     redirect_uri = get_swiggy_redirect_uri(request, phone)
     # A fresh verifier per login attempt, stored against the user because the callback
@@ -286,7 +288,7 @@ def swiggy_callback(request):
     else:
         u = get_user_profile_by_req(request)
         
-    phone = u.phone_number or "6382247549"
+    phone = u.phone_number or ""
     code = request.query_params.get("code") or request.data.get("code")
     if not code:
         return Response({"error": "No authorization code provided."}, status=status.HTTP_400_BAD_REQUEST)
