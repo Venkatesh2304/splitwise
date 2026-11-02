@@ -69,7 +69,13 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             if (!resp.ok) {
-                throw new Error(`Server returned HTTP ${resp.status}: ${resp.statusText}`);
+                // The server says why (e.g. no Splitwise user has this phone); show that
+                let reason = resp.statusText;
+                try {
+                    const errData = await resp.json();
+                    reason = errData.error || errData.detail || reason;
+                } catch (e) {}
+                throw new Error(`${reason} (HTTP ${resp.status})`);
             }
 
             const data = await resp.json();
