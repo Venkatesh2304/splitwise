@@ -100,10 +100,12 @@ class OrderStoreManager:
             return []
 
         # 1. Iterate through fresh orders and insert NEW ones or update existing transient ones
+        synced_ids = []
         for fresh_ord in (fresh_orders or []):
             ord_id = str(fresh_ord.get("order_id") or fresh_ord.get("id") or "").strip()
             if not ord_id or ord_id == "None":
                 continue
+            synced_ids.append(ord_id)
 
             placed_at = resolve_placed_at_ist(fresh_ord.get("placed_at"), fresh_ord)
             total_amt = float(fresh_ord.get("total_amount") or fresh_ord.get("amount") or 0.0)
@@ -172,6 +174,15 @@ class OrderStoreManager:
                             quantity=1,
                             item_json={"name": it}
                         )
+
+        # An order comes from exactly one account: the one syncing it now. Copies saved
+        # under someone else (a sync that matched the wrong person) are dropped. Group
+        # expenses find their order by id, not by owner, so splits are untouched.
+        if synced_ids:
+            moved = GroceryOrderRecord.objects.filter(platform=platform, order_id__in=synced_ids).exclude(user=user_profile)
+            if moved.exists():
+                logger.info("Dropping %d %s orders saved under other users; %s synced them", moved.count(), platform, user_profile)
+                moved.delete()
 
         # 2. Retrieve ALL orders stored in DB for this user & platform
         stored_records = GroceryOrderRecord.objects.filter(

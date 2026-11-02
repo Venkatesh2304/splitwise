@@ -25,7 +25,7 @@ export default function BlinkitOrdersView({ groceriesGroup, currentUser, onExpen
       setLoading(true);
       setError(null);
 
-      const activePhone = currentUser?.phone_number || '6382247549';
+      const activePhone = currentUser?.phone_number || '';
       const activeUserId = currentUser?.id || '';
       const statusRes = await fetch(`${API_BASE_URL}/blinkit/status/?user_id=${encodeURIComponent(activeUserId)}&phone=${encodeURIComponent(activePhone)}`);
       const statusData = await statusRes.json();

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import UserProfile
+from .phone import normalize_phone
 
 class UserProfileSerializer(serializers.ModelSerializer):
     # Whether this person can be paid, without handing their UPI id to every caller
@@ -12,3 +13,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
     def get_has_upi(self, user):
         return bool(user.upi_id)
+
+    def validate_phone_number(self, value):
+        if not value:
+            return ''
+        phone = normalize_phone(value)
+        if not phone:
+            raise serializers.ValidationError("Enter a 10-digit mobile number.")
+        return phone

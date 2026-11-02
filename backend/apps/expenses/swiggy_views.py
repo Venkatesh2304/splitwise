@@ -15,7 +15,7 @@ from django.db.models import Q
 from apps.users.models import UserProfile
 from apps.expenses.models import Expense
 from apps.expenses.grocery_engine import GrocerySplitEngine
-from apps.expenses.grocery_engine.split_engine import order_expense_query
+from apps.expenses.grocery_engine.split_engine import existing_split_for
 from apps.expenses.grocery_engine.state import (
     get_swiggy_order_cache,
     get_swiggy_food_order_cache,
@@ -23,6 +23,7 @@ from apps.expenses.grocery_engine.state import (
 )
 from apps.expenses.grocery_engine.order_store import OrderStoreManager, _sort_orders_descending
 from apps.expenses.blinkit_views import get_user_profile_by_req
+from apps.users.phone import normalize_phone
 
 MCP_BASE = "https://mcp.swiggy.com"
 
@@ -200,9 +201,9 @@ def swiggy_status(request):
 def swiggy_send_otp(request):
     u = get_user_profile_by_req(request)
     raw_phone = request.data.get("phone_number") or request.data.get("phone") or u.phone_number
-    phone_number = str(raw_phone).strip()
-    if not phone_number or len(phone_number) < 10:
-        return Response({"error": "Invalid phone number.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
+    phone_number = normalize_phone(raw_phone)
+    if not phone_number:
+        return Response({"error": "Enter a 10-digit mobile number.", "success": False, "ok": False}, status=status.HTTP_400_BAD_REQUEST)
 
     u.phone_number = phone_number
     u.save()
@@ -824,36 +825,9 @@ def swiggy_orders(request):
     output_orders = []
     for ord_item in orders_list:
         ord_id = str(ord_item.get("order_id", ""))
-        existing_exp = Expense.objects.filter(
-            order_expense_query(ord_id, swiggy_platform_label(ord_item.get("order_type")))
-        ).first()
-        
         ord_copy = dict(ord_item)
-        if existing_exp:
-            ord_copy["is_split"] = True
-            parsed_notes = None
-            if existing_exp.notes:
-                try:
-                    parsed_notes = json.loads(existing_exp.notes)
-                except Exception:
-                    pass
-            
-            split_mode_val = "ITEMIZED"
-            items_saved = []
-            if isinstance(parsed_notes, dict):
-                split_mode_val = parsed_notes.get("split_mode", "ITEMIZED")
-                items_saved = parsed_notes.get("items", [])
-            elif isinstance(parsed_notes, list):
-                items_saved = parsed_notes
-
-            ord_copy["existing_split"] = {
-                "expense_id": existing_exp.id,
-                "split_mode": split_mode_val,
-                "notes_items": items_saved
-            }
-        else:
-            ord_copy["is_split"] = False
-            ord_copy["existing_split"] = None
+        ord_copy["existing_split"] = existing_split_for(ord_id, swiggy_platform_label(ord_item.get("order_type")))
+        ord_copy["is_split"] = ord_copy["existing_split"] is not None
 
         output_orders.append(ord_copy)
 
