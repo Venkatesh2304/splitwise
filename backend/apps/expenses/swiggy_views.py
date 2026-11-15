@@ -1,5 +1,6 @@
 import requests
 import json
+import logging
 import os
 import time
 import base64
@@ -24,6 +25,8 @@ from apps.expenses.grocery_engine.state import (
 from apps.expenses.grocery_engine.order_store import OrderStoreManager, _sort_orders_descending
 from apps.expenses.blinkit_views import get_user_profile_by_req
 from apps.users.phone import normalize_phone
+
+logger = logging.getLogger(__name__)
 
 MCP_BASE = "https://mcp.swiggy.com"
 
@@ -518,7 +521,84 @@ def parse_swiggy_food_orders(orders_payload, details_by_id=None):
     return parsed
 
 
-def parse_swiggy_orders_json(resp_json, headers=None):
+
+# Tool names that read an order and cannot change one. Discovery only ever calls these.
+_DETAIL_TOOL_HINTS = ("order_detail", "order_summary", "order_invoice", "invoice", "order_bill", "get_order")
+_UNSAFE_TOOL_HINTS = ("cancel", "place", "reorder", "checkout", "pay", "update", "add", "remove", "clear", "apply")
+
+
+def instamart_tool_names(user_profile):
+    """Names of the tools Swiggy's Instamart server offers, logged so we can see what exists."""
+    try:
+        body = swiggy_mcp_call_raw(user_profile, IM_PATH, "tools/list")
+        tools = ((body or {}).get("result") or {}).get("tools") or []
+        names = [t.get("name") for t in tools if isinstance(t, dict) and t.get("name")]
+        logger.info("Swiggy Instamart tools: %s", names)
+        return names
+    except SwiggyAuthExpired:
+        raise
+    except Exception as e:
+        logger.warning("Swiggy tools/list failed: %s", e)
+        return []
+
+
+def swiggy_mcp_call_raw(user_profile, path, method, params=None):
+    """A JSON-RPC call that is not tools/call (tools/list)."""
+    headers = {
+        "Authorization": f"Bearer {user_profile.swiggy_access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    res = requests.post(f"{MCP_BASE}{path}", json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+                        headers=headers, timeout=8.0)
+    return _decode_mcp_body(res) if res.status_code == 200 else None
+
+
+def fetch_instamart_track_items(user_profile, ord_id, lat, lng):
+    """track_order's item list for one order, with the raw payload logged.
+
+    Logged in full because track_order has returned fewer items than the order holds;
+    the log shows whether the rest are absent or just named differently.
+    """
+    body = swiggy_mcp_call(user_profile, IM_PATH, "track_order",
+                           {"orderId": ord_id, "lat": lat, "lng": lng}, timeout=5.0)
+    payloads = mcp_text_payloads(body) if body else []
+    sc = ((body or {}).get("result") or {}).get("structuredContent") or (payloads[0] if payloads else {})
+    items = sc.get("items") or []
+    logger.info("Swiggy track_order %s: %d items; payload=%s", ord_id, len(items),
+                json.dumps(body, default=str)[:4000] if body else None)
+    return items
+
+
+def fetch_instamart_detail_items(user_profile, ord_id, lat, lng):
+    """Per-item prices from any read-only order-detail tool Swiggy offers, else [].
+
+    Tool names are discovered, not hardcoded: nothing documents them. Every payload is
+    logged so the right tool and shape can be confirmed from production logs.
+    """
+    for name in instamart_tool_names(user_profile):
+        low = name.lower()
+        if not any(h in low for h in _DETAIL_TOOL_HINTS) or any(u in low for u in _UNSAFE_TOOL_HINTS):
+            continue
+        if low == "get_orders":
+            continue
+        try:
+            body = swiggy_mcp_call(user_profile, IM_PATH, name,
+                                   {"orderId": ord_id, "lat": lat, "lng": lng}, timeout=8.0)
+        except SwiggyAuthExpired:
+            raise
+        except Exception as e:
+            logger.warning("Swiggy %s failed for %s: %s", name, ord_id, e)
+            continue
+        logger.info("Swiggy %s %s: payload=%s", name, ord_id, json.dumps(body, default=str)[:4000] if body else None)
+        sc = ((body or {}).get("result") or {}).get("structuredContent") or {}
+        items = sc.get("items") or sc.get("orderItems") or sc.get("order_items") or []
+        if items and any(isinstance(i, dict) and (i.get("price") or i.get("finalPrice") or i.get("total")) for i in items):
+            return items
+    return []
+
+
+def parse_swiggy_orders_json(resp_json, headers=None, user_profile=None):
     raw_orders = []
     if "result" in resp_json and "content" in resp_json["result"]:
         for item in resp_json["result"]["content"]:
@@ -557,12 +637,18 @@ def parse_swiggy_orders_json(resp_json, headers=None):
         
         # Try fetching real per-item prices from track_order if headers are available
         track_items = []
-        if headers:
+        addr = ord_item.get("deliveryAddress") or {}
+        lat = float(addr.get("lat") or 28.4595)
+        lng = float(addr.get("lng") or 77.0266)
+        if user_profile is not None:
             try:
-                addr = ord_item.get("deliveryAddress") or {}
-                lat = float(addr.get("lat") or 28.4595)
-                lng = float(addr.get("lng") or 77.0266)
-                
+                track_items = fetch_instamart_track_items(user_profile, ord_id, lat, lng)
+            except SwiggyAuthExpired:
+                raise
+            except Exception as e:
+                logger.warning("track_order price fetch skipped for %s: %s", ord_id, e)
+        elif headers:
+            try:
                 track_payload = {
                     "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                     "params": {"name": "track_order", "arguments": {"orderId": ord_id, "lat": lat, "lng": lng}}
@@ -571,8 +657,22 @@ def parse_swiggy_orders_json(resp_json, headers=None):
                 if tr_res.status_code == 200:
                     sc = tr_res.json().get("result", {}).get("structuredContent", {})
                     track_items = sc.get("items", [])
+                logger.info("Swiggy track_order %s: %d items", ord_id, len(track_items))
             except Exception as e:
-                print(f"track_order price fetch skipped for {ord_id}: {e}")
+                logger.warning("track_order price fetch skipped for %s: %s", ord_id, e)
+
+        # track_order can list only some of an order's items. When it does, ask any
+        # read-only detail tool for the full list before falling back to guessing.
+        if user_profile is not None and len(track_items) < len([i for i in items_raw if i]):
+            try:
+                detail_items = fetch_instamart_detail_items(user_profile, ord_id, lat, lng)
+            except SwiggyAuthExpired:
+                raise
+            except Exception as e:
+                logger.warning("Swiggy order detail lookup failed for %s: %s", ord_id, e)
+                detail_items = []
+            if len(detail_items) > len(track_items):
+                track_items = detail_items
 
         # Real other charges (handling/delivery) = grandTotal - itemTotal
         other_chg = max(0.0, round(tot_amt - item_total, 2))
@@ -766,7 +866,7 @@ def fetch_swiggy_orders_internal(user_profile, force_refresh=False):
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/event-stream",
             }
-            fresh = parse_swiggy_orders_json(body, headers=headers)
+            fresh = parse_swiggy_orders_json(body, headers=headers, user_profile=user_profile)
             instamart_rows = OrderStoreManager.save_and_merge_orders(
                 user_profile, INSTAMART_PLATFORM, fresh)
     except SwiggyAuthExpired as e:
