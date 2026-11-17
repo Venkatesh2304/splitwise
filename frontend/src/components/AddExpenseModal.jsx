@@ -61,6 +61,10 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
 
   const currentGroup = groups.find(g => String(g.id) === String(selectedGroupId)) || activeGroup || (groups.length > 0 ? groups[0] : null);
   const groupMembers = currentGroup ? currentGroup.members || [] : [];
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const inactiveMembers = groupMembers.filter(m => m.is_active === false);
+  const hasInactiveMembers = inactiveMembers.length > 0;
+  const effectiveMembers = includeInactive ? groupMembers : groupMembers.filter(m => m.is_active !== false);
 
   useEffect(() => {
     if (editingExpense) {
@@ -75,25 +79,28 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
   useEffect(() => {
     if (editingExpense) return; // filled from the expense instead (below)
     if (groupMembers.length > 0) {
-      const allIds = groupMembers.map(m => m.id);
-      setSelectedSplitMemberIds(allIds);
+      const activeMembers = includeInactive ? groupMembers : groupMembers.filter(m => m.is_active !== false);
+      const targetIds = activeMembers.length > 0 ? activeMembers.map(m => m.id) : groupMembers.map(m => m.id);
+      setSelectedSplitMemberIds(targetIds);
 
       // Default paidBy to activeUser if member, otherwise first member
-      if (activeUser && allIds.includes(activeUser.id)) {
+      if (activeUser && targetIds.includes(activeUser.id)) {
         setPaidById(String(activeUser.id));
+      } else if (targetIds.length > 0) {
+        setPaidById(String(targetIds[0]));
       } else {
-        setPaidById(String(allIds[0]));
+        setPaidById(String(groupMembers[0].id));
       }
 
       // Initialize default equal percentages / exacts
       const initialCustom = {};
-      const equalPct = (100 / allIds.length).toFixed(2);
-      allIds.forEach(id => {
+      const equalPct = targetIds.length > 0 ? (100 / targetIds.length).toFixed(2) : '0.00';
+      targetIds.forEach(id => {
         initialCustom[id] = equalPct;
       });
       setCustomValues(initialCustom);
     }
-  }, [selectedGroupId, currentGroup, editingExpense]);
+  }, [selectedGroupId, currentGroup, editingExpense, includeInactive]);
 
   // Opening the list starts from whoever the dropdown had, with the whole amount on them
   useEffect(() => {
@@ -118,6 +125,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
       setItems([]);
       setCharges('');
       setShareUnits({});
+      setIncludeInactive(false);
       setManyPayers(false);
       setPayerAmounts({});
       return;
@@ -588,13 +596,41 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                   className={`tab-btn ${splitType === 'ITEMS' ? 'active' : ''}`}
                   onClick={() => {
                     setSplitType('ITEMS');
-                    if (items.length === 0) setItems([blankItem(groupMembers.map(m => m.id))]);
+                    if (items.length === 0) setItems([blankItem(effectiveMembers.map(m => m.id))]);
                   }}
                 >
                   By items
                 </button>
               </div>
             </div>
+
+            {/* Inactive members configuration banner */}
+            {hasInactiveMembers && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0.45rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.25)',
+                marginBottom: '0.85rem',
+                fontSize: '0.75rem'
+              }}>
+                <span style={{ color: 'var(--text-muted)' }}>
+                  {inactiveMembers.length} inactive member{inactiveMembers.length > 1 ? 's' : ''} in group ({inactiveMembers.map(m => m.name.split(' ')[0]).join(', ')})
+                </span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer', color: '#ffffff', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={includeInactive}
+                    onChange={(e) => setIncludeInactive(e.target.checked)}
+                    style={{ cursor: 'pointer', accentColor: 'var(--accent-primary)' }}
+                  />
+                  Include inactive
+                </label>
+              </div>
+            )}
 
             {/* Items, when the bill is split line by line */}
             {isItems ? (
@@ -606,7 +642,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                   </div>
                 )}
                 <ItemsEditor
-                  members={groupMembers}
+                  members={effectiveMembers}
                   items={items}
                   onItemsChange={setItems}
                   charges={charges}
@@ -639,7 +675,7 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                 </div>
               )}
 
-              {groupMembers.map(m => {
+              {effectiveMembers.map(m => {
                 const isSelected = selectedSplitMemberIds.includes(m.id);
                 const equalShare = totalAmountNum > 0 && selectedSplitMemberIds.length > 0 && isSelected
                   ? (totalAmountNum / selectedSplitMemberIds.length).toFixed(2)
@@ -674,6 +710,19 @@ export default function AddExpenseModal({ isOpen, onClose, groups, activeGroup, 
                       <span style={{ fontSize: '0.875rem', color: '#ffffff', opacity: isSelected ? 1 : 0.5 }}>
                         {m.name}
                       </span>
+                      {m.is_active === false && (
+                        <span style={{
+                          fontSize: '0.65rem',
+                          padding: '1px 5px',
+                          borderRadius: '4px',
+                          backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                          color: '#f87171',
+                          marginLeft: '0.35rem',
+                          fontWeight: 600
+                        }}>
+                          Inactive
+                        </span>
+                      )}
                     </div>
 
                     <div>

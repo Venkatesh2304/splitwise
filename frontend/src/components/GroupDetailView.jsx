@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { useUser } from '../context/UserContext';
-import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight, Sparkles } from 'lucide-react';
+import { ArrowLeft, Plus, HandCoins, Trash2, X, Pencil, ChevronRight, Sparkles, Download, UserCheck, UserX } from 'lucide-react';
 import GroupSummary from './GroupSummary';
 import ItemizedSplitModal from './ItemizedSplitModal';
 import { canOpenUpiApp, upiPayLink } from '../utils/upi';
@@ -270,28 +270,111 @@ export default function GroupDetailView({
     }
   };
 
+  const handleToggleMemberActive = async (memberId) => {
+    try {
+      const res = await api.toggleMemberActive(groupData.id, memberId);
+      if (res && res.user_id) {
+        setGroupData(prev => {
+          if (!prev) return prev;
+          const updatedMembers = (prev.members || []).map(m => {
+            if (m.id === res.user_id) {
+              return { ...m, is_active: res.is_active };
+            }
+            return m;
+          });
+          return { ...prev, members: updatedMembers };
+        });
+      }
+    } catch (err) {
+      alert('Failed to update member status: ' + (err.message || 'Error'));
+    }
+  };
+
+  const handleSetAllMembersActive = async (isActive) => {
+    try {
+      await api.setAllMembersActive(groupData.id, isActive);
+      setGroupData(prev => {
+        if (!prev) return prev;
+        const updatedMembers = (prev.members || []).map(m => ({ ...m, is_active: isActive }));
+        return { ...prev, members: updatedMembers };
+      });
+    } catch (err) {
+      alert('Failed to configure members: ' + (err.message || 'Error'));
+    }
+  };
+
   const handleExportCsv = () => {
     if (!groupData || !groupData.expenses) return;
-    const headers = ['Date', 'Description', 'Category', 'Amount', 'Paid By'];
-    const rows = groupData.expenses.map(exp => {
-      const date = new Date(exp.created_at).toLocaleDateString('en-IN');
-      const desc = `"${(exp.description || '').replace(/"/g, '""')}"`;
-      const cat = exp.category || '';
-      const amt = exp.amount;
-      const payer = `"${payerSummary(exp, actorId, groupData.members).replace(/"/g, '""')}"`;
-      return [date, desc, cat, amt, payer].join(',');
+    const membersList = groupData.members || [];
+
+    // Headers: Date, Description, Category, Split Type, Total Amount, Paid By, then for each member: Paid, Share, Net
+    const headers = ['Date', 'Description', 'Category', 'Split Type', 'Total Amount', 'Paid By'];
+    membersList.forEach(m => {
+      headers.push(`"${m.name} (Paid)"`);
+      headers.push(`"${m.name} (Share)"`);
+      headers.push(`"${m.name} (Net)"`);
     });
-    
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
+
+    const rows = (groupData.expenses || []).map(exp => {
+      const date = exp.date || (exp.created_at ? new Date(exp.created_at).toLocaleDateString('en-IN') : '');
+      const desc = `"${(exp.description || '').replace(/"/g, '""')}"`;
+      const cat = exp.category || 'OTHER';
+      const splitType = exp.split_type || 'EQUAL';
+      const amt = parseFloat(exp.amount) || 0;
+
+      const payerMap = {};
+      (exp.payers || []).forEach(p => {
+        const uId = p.user?.id || p.user_id;
+        if (uId) payerMap[uId] = (payerMap[uId] || 0) + (parseFloat(p.amount_paid) || 0);
+      });
+
+      const shareMap = {};
+      (exp.shares || []).forEach(s => {
+        const uId = s.user?.id || s.user_id;
+        if (uId) shareMap[uId] = (shareMap[uId] || 0) + (parseFloat(s.amount_owed) || 0);
+      });
+
+      const payerNames = (exp.payers || [])
+        .filter(p => (parseFloat(p.amount_paid) || 0) > 0)
+        .map(p => {
+          const u = p.user || membersList.find(m => m.id === (p.user_id || p.user?.id));
+          return `${u ? u.name : 'Unknown'} (${parseFloat(p.amount_paid).toFixed(2)})`;
+        });
+      const paidByStr = `"${(payerNames.length > 0 ? payerNames.join(', ') : (exp.created_by?.name || 'Someone')).replace(/"/g, '""')}"`;
+
+      const row = [date, desc, cat, splitType, amt.toFixed(2), paidByStr];
+      membersList.forEach(m => {
+        const paid = payerMap[m.id] || 0;
+        const share = shareMap[m.id] || 0;
+        const net = paid - share;
+        row.push(paid.toFixed(2));
+        row.push(share.toFixed(2));
+        row.push(net >= 0 ? `+${net.toFixed(2)}` : net.toFixed(2));
+      });
+      return row.join(',');
+    });
+
+    // Summary row at bottom with net balances
+    const totalRow = ['TOTALS', `"${groupData.name} Total"`, '', '', (parseFloat(groupData.total_spending) || 0).toFixed(2), ''];
+    membersList.forEach(m => {
+      const bal = groupData.net_balances ? (groupData.net_balances[m.id] || 0) : 0;
+      totalRow.push('');
+      totalRow.push('');
+      totalRow.push(bal >= 0 ? `+${bal.toFixed(2)}` : bal.toFixed(2));
+    });
+    rows.push(totalRow.join(','));
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `${groupData.name}_expenses.csv`);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `${(groupData.name || 'group').replace(/[^a-zA-Z0-9_-]/g, '_')}_splits.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
-
 
   const handleDeleteSettlement = async (settlementId) => {
     if (!window.confirm('Delete this settle-up payment? Balances will go back to how they were before it.')) return;
@@ -445,7 +528,16 @@ export default function GroupDetailView({
           <span>Back</span>
         </button>
 
-        <div style={{ display: 'flex', gap: '0.35rem' }}>
+        <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={handleExportCsv}
+            title="Export all splits to CSV file"
+            style={{ padding: '0.35rem 0.6rem', fontSize: '0.775rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+          >
+            <Download size={13} />
+            <span>Export CSV</span>
+          </button>
           <button className="btn btn-primary btn-sm" onClick={() => onOpenAddExpense(groupData)} style={{ padding: '0.35rem 0.6rem', fontSize: '0.775rem' }}>
             <Plus size={13} />
             <span>Add Expense</span>
@@ -460,21 +552,7 @@ export default function GroupDetailView({
             <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#ffffff', lineHeight: 1.2 }}>
               {groupData.name}
             </h2>
-            {groupData.name.toLowerCase().includes('groceries') && (
-              <div style={{ marginBottom: '0.4rem', marginTop: '0.2rem' }}>
-                <button 
-                  onClick={handleExportCsv}
-                  style={{
-                    background: 'none', border: '1px solid var(--border-color)', 
-                    color: 'var(--text-dim)', fontSize: '0.75rem', padding: '0.2rem 0.5rem', 
-                    borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem'
-                  }}
-                >
-                  <Sparkles size={12} /> Export to CSV
-                </button>
-              </div>
-            )}
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
               Total Spending: {currency}{groupData.total_spending ? Math.round(groupData.total_spending) : 0}
             </div>
           </div>
@@ -779,13 +857,41 @@ export default function GroupDetailView({
         <div>
           {/* 1. Member Net Balances Card */}
           <div className="card" style={{ marginBottom: '1rem', padding: '1rem' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block', marginBottom: '0.75rem' }}>
-              Member Net Balances
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.35rem' }}>
+              <div>
+                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', display: 'block' }}>
+                  Member Balances & Activity Status
+                </span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+                  Click badge or configure everyone in group to include / exclude in splits
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleSetAllMembersActive(true)}
+                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.675rem' }}
+                  title="Configure everyone in the group to active"
+                >
+                  All Active
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => handleSetAllMembersActive(false)}
+                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.675rem' }}
+                  title="Configure everyone in the group to inactive"
+                >
+                  All Inactive
+                </button>
+              </div>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
               {members.map((m) => {
                 const bal = netBalances[m.id] || 0.0;
                 const isMe = m.id === myUserId;
+                const isActive = m.is_active !== false;
                 return (
                   <div
                     key={m.id}
@@ -796,7 +902,8 @@ export default function GroupDetailView({
                       padding: '0.5rem 0.75rem',
                       backgroundColor: 'rgba(15, 23, 42, 0.6)',
                       borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--border-color)'
+                      border: '1px solid var(--border-color)',
+                      opacity: isActive ? 1 : 0.75
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -808,6 +915,27 @@ export default function GroupDetailView({
                       <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#ffffff' }}>
                         {isMe ? `${m.name} (You)` : m.name}
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleMemberActive(m.id)}
+                        title={isActive ? 'Click to mark inactive (excluded from equal bill splits by default)' : 'Click to mark active'}
+                        style={{
+                          background: isActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(148, 163, 184, 0.15)',
+                          border: isActive ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(148, 163, 184, 0.4)',
+                          color: isActive ? '#10b981' : '#94a3b8',
+                          borderRadius: '4px',
+                          fontSize: '0.675rem',
+                          fontWeight: 600,
+                          padding: '0.1rem 0.4rem',
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.25rem'
+                        }}
+                      >
+                        {isActive ? <UserCheck size={11} /> : <UserX size={11} />}
+                        <span>{isActive ? 'Active' : 'Inactive'}</span>
+                      </button>
                     </div>
 
                     <div>

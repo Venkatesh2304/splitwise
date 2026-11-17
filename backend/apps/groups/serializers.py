@@ -11,10 +11,10 @@ class GroupMemberSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = GroupMember
-        fields = ['id', 'user', 'user_id', 'joined_at']
+        fields = ['id', 'user', 'user_id', 'joined_at', 'is_active']
 
 class GroupSerializer(serializers.ModelSerializer):
-    members = UserProfileSerializer(many=True, read_only=True)
+    members = serializers.SerializerMethodField()
     member_ids = serializers.ListField(
         child=serializers.IntegerField(), write_only=True, required=False
     )
@@ -26,6 +26,15 @@ class GroupSerializer(serializers.ModelSerializer):
             'id', 'name', 'description', 'category', 'currency', 
             'created_at', 'members', 'member_ids', 'total_spending'
         ]
+
+    def get_members(self, obj):
+        memberships = GroupMember.objects.filter(group=obj).select_related('user')
+        result = []
+        for gm in memberships:
+            user_data = UserProfileSerializer(gm.user).data
+            user_data['is_active'] = getattr(gm, 'is_active', True)
+            result.append(user_data)
+        return result
 
     def create(self, validated_data):
         member_ids = validated_data.pop('member_ids', [])

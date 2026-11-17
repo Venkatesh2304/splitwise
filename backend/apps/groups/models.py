@@ -25,6 +25,7 @@ class GroupMember(models.Model):
     # When this person last looked at the group. Null means never, and joined_at is used
     # instead, so a new member isn't handed the whole history as unread.
     last_seen_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
 
     class Meta:
         unique_together = ('group', 'user')

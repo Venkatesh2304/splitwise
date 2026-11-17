@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { API_BASE_URL } from '../services/api';
-import { X, Zap, Users, UserCheck, User, CheckCircle2, DollarSign } from 'lucide-react';
+import { X, Zap, Users, UserCheck, User, CheckCircle2, DollarSign, PieChart } from 'lucide-react';
 import { deriveOrderTitle } from '../utils/products';
 
 export default function ItemizedSplitModal({
@@ -27,10 +27,12 @@ export default function ItemizedSplitModal({
   const [customTitle, setCustomTitle] = useState('');
   const [buyerId, setBuyerId] = useState(currentUser ? currentUser.id : null);
   
-  // Tab 1: Bill Level Options ('ALL' | 'CHOOSE' | 'CUSTOM')
+  // Tab 1: Bill Level Options ('ALL' | 'CHOOSE' | 'CUSTOM' | 'SHARES')
   const [billSubMode, setBillSubMode] = useState('ALL');
   const [billAssignedMemberIds, setBillAssignedMemberIds] = useState([]);
   const [customBillAmounts, setCustomBillAmounts] = useState({});
+  const [customBillShares, setCustomBillShares] = useState({});
+  const [includeInactive, setIncludeInactive] = useState(false);
 
   // Tab 2: Itemized Products State
   const [itemsState, setItemsState] = useState([]);
@@ -38,7 +40,10 @@ export default function ItemizedSplitModal({
   const [error, setError] = useState(null);
 
   const groupMembers = groceriesGroup ? groceriesGroup.members || [] : [];
-  const allMemberIds = groupMembers.map(m => m.id);
+  const activeMembers = groupMembers.filter(m => m.is_active !== false);
+  const inactiveMembers = groupMembers.filter(m => m.is_active === false);
+  const effectiveGroupMembers = includeInactive ? groupMembers : (activeMembers.length > 0 ? activeMembers : groupMembers);
+  const allMemberIds = effectiveGroupMembers.map(m => m.id);
   const totalAmount = parseFloat(order ? order.total_amount : 0) || 0.0;
 
   useEffect(() => {
@@ -49,9 +54,14 @@ export default function ItemizedSplitModal({
 
     // Initialize custom bill amounts equal split defaults (rounded whole rupees, no decimals)
     const initialAmounts = {};
-    const equalShare = groupMembers.length > 0 ? Math.round(totalAmount / groupMembers.length).toString() : '0';
+    const equalShare = allMemberIds.length > 0 ? Math.round(totalAmount / allMemberIds.length).toString() : '0';
     allMemberIds.forEach(id => { initialAmounts[id] = equalShare; });
     setCustomBillAmounts(initialAmounts);
+
+    // Initialize custom bill shares with 1 share per member
+    const initialShares = {};
+    allMemberIds.forEach(id => { initialShares[id] = 1; });
+    setCustomBillShares(initialShares);
 
     if (order && order.item_details && order.item_details.length > 0) {
       const existingItems = order.existing_split ? order.existing_split.notes_items || [] : [];
@@ -72,7 +82,7 @@ export default function ItemizedSplitModal({
       });
       setItemsState(initialItems);
     }
-  }, [order, groceriesGroup]);
+  }, [order, groceriesGroup, includeInactive]);
 
   if (!isOpen || !order || !groceriesGroup) return null;
 
@@ -171,6 +181,22 @@ export default function ItemizedSplitModal({
       if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
         computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
       }
+    } else if (billSubMode === 'SHARES') {
+      const assigned = billAssignedMemberIds.length > 0 ? billAssignedMemberIds : allMemberIds;
+      const totalUnits = assigned.reduce((sum, id) => sum + (parseFloat(customBillShares[id]) || 0), 0);
+      if (totalUnits > 0) {
+        let currentSum = 0;
+        assigned.forEach(id => {
+          const u = parseFloat(customBillShares[id]) || 0;
+          const share = round2((totalAmount * u) / totalUnits);
+          computedFinalOwedMap[id] = share;
+          currentSum = round2(currentSum + share);
+        });
+        const diff = round2(totalAmount - currentSum);
+        if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
+          computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
+        }
+      }
     }
   } else {
     const tempProductSubtotals = {};
@@ -237,7 +263,9 @@ export default function ItemizedSplitModal({
         bill_split: {
           type: billSubMode,
           member_ids: billAssignedMemberIds,
-          custom_amounts: customBillAmounts
+          custom_amounts: customBillAmounts,
+          shares: customBillShares,
+          include_inactive: includeInactive
         },
         item_splits: itemList.map(i => ({
           name: i.name,
@@ -358,36 +386,74 @@ export default function ItemizedSplitModal({
           {/* TAB 1: BILL LEVEL SPLIT OPTIONS */}
           {splitMode === 'BILL_LEVEL' && (
             <div>
-              {/* Sub-modes: Equal (Everyone), Choose People, Custom Values */}
+              {/* Option to include/exclude inactive members if any exist */}
+              {inactiveMembers.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '0.45rem 0.65rem',
+                  backgroundColor: 'rgba(30, 41, 59, 0.5)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 'var(--radius-sm)',
+                  marginBottom: '0.75rem',
+                  fontSize: '0.75rem'
+                }}>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {inactiveMembers.length} inactive member{inactiveMembers.length > 1 ? 's' : ''} in group ({inactiveMembers.map(m => m.name.split(' ')[0]).join(', ')})
+                  </span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer', color: '#ffffff', fontWeight: 600 }}>
+                    <input
+                      type="checkbox"
+                      checked={includeInactive}
+                      onChange={(e) => setIncludeInactive(e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: 'var(--accent-primary)' }}
+                    />
+                    Include inactive
+                  </label>
+                </div>
+              )}
+
+              {/* Sub-modes: Equal (Everyone), Choose People, By Shares, Custom Values */}
               <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.85rem' }}>
                 <button
                   type="button"
                   className={`btn btn-sm ${billSubMode === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setBillSubMode('ALL')}
-                  style={{ fontSize: '0.75rem', flex: 1, padding: '0.3rem 0.5rem' }}
+                  style={{ fontSize: '0.725rem', flex: 1, padding: '0.3rem 0.4rem' }}
                 >
-                  <Users size={13} />
-                  <span>Equal (Everyone)</span>
+                  <Users size={12} />
+                  <span>Equal</span>
                 </button>
 
                 <button
                   type="button"
                   className={`btn btn-sm ${billSubMode === 'CHOOSE' ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setBillSubMode('CHOOSE')}
-                  style={{ fontSize: '0.75rem', flex: 1, padding: '0.3rem 0.5rem' }}
+                  style={{ fontSize: '0.725rem', flex: 1, padding: '0.3rem 0.4rem' }}
                 >
-                  <UserCheck size={13} />
-                  <span>Choose People</span>
+                  <UserCheck size={12} />
+                  <span>Choose</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`btn btn-sm ${billSubMode === 'SHARES' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setBillSubMode('SHARES')}
+                  style={{ fontSize: '0.725rem', flex: 1, padding: '0.3rem 0.4rem' }}
+                >
+                  <PieChart size={12} />
+                  <span>By Shares</span>
                 </button>
 
                 <button
                   type="button"
                   className={`btn btn-sm ${billSubMode === 'CUSTOM' ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setBillSubMode('CUSTOM')}
-                  style={{ fontSize: '0.75rem', flex: 1, padding: '0.3rem 0.5rem' }}
+                  style={{ fontSize: '0.725rem', flex: 1, padding: '0.3rem 0.4rem' }}
                 >
-                  <DollarSign size={13} />
-                  <span>Custom Values</span>
+                  <DollarSign size={12} />
+                  <span>Custom</span>
                 </button>
               </div>
 
@@ -395,10 +461,10 @@ export default function ItemizedSplitModal({
               {billSubMode === 'ALL' && (
                 <div className="card" style={{ padding: '0.85rem', marginBottom: '1rem', backgroundColor: 'rgba(30, 41, 59, 0.4)' }}>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block', marginBottom: '0.5rem' }}>
-                    Total bill of <strong>₹{Math.round(totalAmount)}</strong> will be split equally among all {groupMembers.length} group members.
+                    Total bill of <strong>₹{Math.round(totalAmount)}</strong> will be split equally among all {effectiveGroupMembers.length} group members.
                   </span>
                   <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent-primary)' }}>
-                    ₹{Math.round(totalAmount / max1(groupMembers.length))} / person
+                    ₹{Math.round(totalAmount / max1(effectiveGroupMembers.length))} / person
                   </div>
                 </div>
               )}
@@ -436,6 +502,9 @@ export default function ItemizedSplitModal({
                             style={{ width: '16px', height: '16px', borderRadius: '50%' }}
                           />
                           <span>{m.name.split(' ')[0]}</span>
+                          {m.is_active === false && (
+                            <span style={{ fontSize: '0.625rem', opacity: 0.7 }}>(Inactive)</span>
+                          )}
                         </button>
                       );
                     })}
@@ -446,7 +515,73 @@ export default function ItemizedSplitModal({
                 </div>
               )}
 
-              {/* Sub-mode 3: Custom Values / Amounts */}
+              {/* Sub-mode 3: By Shares */}
+              {billSubMode === 'SHARES' && (
+                <div className="card" style={{ padding: '0.85rem', marginBottom: '1rem', backgroundColor: 'rgba(30, 41, 59, 0.4)' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>
+                    Enter number of shares for each person (Total: ₹{Math.round(totalAmount)}):
+                  </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                    {effectiveGroupMembers.map(m => {
+                      const u = parseFloat(customBillShares[m.id]) || 0;
+                      const totalUnits = effectiveGroupMembers.reduce((sum, member) => sum + (parseFloat(customBillShares[member.id]) || 0), 0);
+                      const approxAmt = totalUnits > 0 ? Math.round((totalAmount * u) / totalUnits) : 0;
+                      return (
+                        <div key={m.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: '#ffffff' }}>
+                            <img
+                              src={m.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${m.name}`}
+                              alt={m.name}
+                              style={{ width: '18px', height: '18px', borderRadius: '50%' }}
+                            />
+                            <span>{m.name}</span>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                              ({approxAmt > 0 ? `₹${approxAmt}` : '₹0'})
+                            </span>
+                            {m.is_active === false && (
+                              <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)', padding: '0.05rem 0.3rem', backgroundColor: 'rgba(148, 163, 184, 0.15)', borderRadius: '3px' }}>
+                                Inactive
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setCustomBillShares({ ...customBillShares, [m.id]: Math.max(0, u - 1) })}
+                              style={{ padding: '0.1rem 0.4rem', fontSize: '0.75rem', minWidth: '22px' }}
+                            >
+                              -
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              className="form-input"
+                              style={{ width: '45px', padding: '0.2rem', fontSize: '0.8rem', textAlign: 'center' }}
+                              value={customBillShares[m.id] ?? 1}
+                              onChange={(e) => setCustomBillShares({ ...customBillShares, [m.id]: Math.max(0, parseFloat(e.target.value) || 0) })}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setCustomBillShares({ ...customBillShares, [m.id]: u + 1 })}
+                              style={{ padding: '0.1rem 0.4rem', fontSize: '0.75rem', minWidth: '22px' }}
+                            >
+                              +
+                            </button>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', minWidth: '38px' }}>
+                              {u === 1 ? 'share' : 'shares'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Sub-mode 4: Custom Values / Amounts */}
               {billSubMode === 'CUSTOM' && (
                 <div className="card" style={{ padding: '0.85rem', marginBottom: '1rem', backgroundColor: 'rgba(30, 41, 59, 0.4)' }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>

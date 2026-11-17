@@ -156,3 +156,77 @@ class GroupViewSet(viewsets.ModelViewSet):
             return Response({'message': 'User is already a member of this group'}, status=status.HTTP_200_OK)
 
         return Response({'message': f'Added {user.name} to {group.name}'}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='toggle-member-active')
+    def toggle_member_active(self, request, pk=None):
+        group = self.get_object()
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if user_id == 'all' or request.data.get('all'):
+            is_active_val = request.data.get('is_active', True)
+            GroupMember.objects.filter(group=group).update(is_active=bool(is_active_val))
+            return Response({'all': True, 'is_active': bool(is_active_val)})
+
+        gm = GroupMember.objects.filter(group=group, user_id=user_id).first()
+        if not gm:
+            return Response({'error': 'Member not found in this group'}, status=status.HTTP_404_NOT_FOUND)
+        
+        if 'is_active' in request.data:
+            gm.is_active = bool(request.data['is_active'])
+        else:
+            gm.is_active = not getattr(gm, 'is_active', True)
+        gm.save()
+        return Response({'user_id': user_id, 'is_active': gm.is_active})
+
+    @action(detail=True, methods=['get'], url_path='export-csv')
+    def export_csv(self, request, pk=None):
+        import csv
+        from django.http import HttpResponse
+        from apps.expenses.models import Expense
+
+        group = self.get_object()
+        members = list(group.members.all())
+        expenses = (Expense.objects.filter(group=group).order_by('date', 'created_at')
+                    .prefetch_related('payers__user', 'shares__user'))
+
+        response = HttpResponse(content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="{group.name}_splits.csv"'
+
+        writer = csv.writer(response)
+        
+        headers = ['Date', 'Description', 'Category', 'Split Type', 'Total Amount', 'Paid By']
+        for m in members:
+            headers.append(f'{m.name} (Paid)')
+            headers.append(f'{m.name} (Share)')
+            headers.append(f'{m.name} (Net)')
+        writer.writerow(headers)
+
+        for exp in expenses:
+            date_str = exp.date.strftime('%Y-%m-%d') if exp.date else ''
+            desc = exp.description or ''
+            cat = exp.get_category_display() if hasattr(exp, 'get_category_display') else exp.category
+            split_type = exp.split_type or 'EQUAL'
+            total_amt = float(exp.amount)
+            
+            payer_map = {p.user_id: float(p.amount_paid) for p in exp.payers.all()}
+            share_map = {s.user_id: float(s.amount_owed) for s in exp.shares.all()}
+            
+            payer_names = []
+            for p in exp.payers.all():
+                if float(p.amount_paid) > 0:
+                    payer_names.append(f"{p.user.name} ({p.amount_paid})")
+            paid_by_str = ", ".join(payer_names) if payer_names else (exp.created_by.name if exp.created_by else 'Unknown')
+
+            row = [date_str, desc, cat, split_type, f"{total_amt:.2f}", paid_by_str]
+            for m in members:
+                paid = payer_map.get(m.id, 0.0)
+                share = share_map.get(m.id, 0.0)
+                net = paid - share
+                row.append(f"{paid:.2f}")
+                row.append(f"{share:.2f}")
+                row.append(f"{net:+.2f}")
+            writer.writerow(row)
+
+        return response

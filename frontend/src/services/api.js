@@ -88,6 +88,14 @@ export const api = {
     method: 'POST',
     body: { user_id: userId }
   }),
+  toggleMemberActive: (groupId, userId, isActive) => request(`/groups/${groupId}/toggle-member-active/`, {
+    method: 'POST',
+    body: { user_id: userId, is_active: isActive }
+  }),
+  setAllMembersActive: (groupId, isActive) => request(`/groups/${groupId}/toggle-member-active/`, {
+    method: 'POST',
+    body: { user_id: 'all', is_active: isActive }
+  }),
 
   // Expenses (actor_id = who is making the change; they aren't notified about it)
   // The saved grocery order behind an expense, whoever's account it came from

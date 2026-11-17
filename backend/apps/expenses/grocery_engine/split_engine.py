@@ -232,9 +232,17 @@ class GrocerySplitEngine:
                     for it in rec.item_details if isinstance(it, dict)
                 ]
 
-        bill_assigned_ids = member_ids
-        if bill_split_data and "member_ids" in bill_split_data:
+        from apps.groups.models import GroupMember
+        inactive_ids = set(GroupMember.objects.filter(group=group, is_active=False).values_list('user_id', flat=True))
+        active_ids = [uid for uid in member_ids if uid not in inactive_ids]
+        include_inactive = bill_split_data.get("include_inactive", True) if bill_split_data else True
+        default_members = member_ids if include_inactive else (active_ids or member_ids)
+
+        bill_assigned_ids = default_members
+        if bill_split_data and "member_ids" in bill_split_data and bill_split_data.get("type") in ("CHOOSE", "CUSTOM", "SHARES"):
             valid_b_ids = [m_id for m_id in bill_split_data["member_ids"] if m_id in member_ids]
+            if not include_inactive:
+                valid_b_ids = [m_id for m_id in valid_b_ids if m_id not in inactive_ids]
             if valid_b_ids:
                 bill_assigned_ids = valid_b_ids
 
@@ -246,7 +254,7 @@ class GrocerySplitEngine:
                 else:
                     assigned = it.get("assigned_member_ids")
                     if not assigned:
-                        assigned = member_ids
+                        assigned = default_members
                 assigned_names = [m.name.split(' ')[0] for m in all_members if m.id in assigned]
                 products_json_list.append({
                     "name": it.get("name"),
@@ -268,6 +276,24 @@ class GrocerySplitEngine:
                 diff = round(total_amount - sum(owed_amounts.values()), 2)
                 if diff != 0 and buyer.id in owed_amounts:
                     owed_amounts[buyer.id] = round(owed_amounts[buyer.id] + diff, 2)
+            elif b_type == "SHARES" and bill_split_data and "shares" in bill_split_data:
+                shares_dict = bill_split_data.get("shares", {})
+                assigned_ids = bill_assigned_ids
+                custom_values = {m_id: float(shares_dict.get(str(m_id), shares_dict.get(m_id, 1.0)) or 0.0) for m_id in assigned_ids}
+                from domain.split_calculator import calculate_splits, SplitType
+                calc_owed, err = calculate_splits(total_amount, SplitType.SHARES, assigned_ids, custom_values)
+                if not err:
+                    for m_id in assigned_ids:
+                        owed_amounts[m_id] = calc_owed.get(m_id, 0.0)
+                else:
+                    n = len(assigned_ids)
+                    share_per_person = round(total_amount / n, 2)
+                    for m_id in assigned_ids:
+                        owed_amounts[m_id] = share_per_person
+                diff = round(total_amount - sum(owed_amounts.values()), 2)
+                if diff != 0 and assigned_ids:
+                    remainder_target = buyer.id if buyer.id in assigned_ids else assigned_ids[0]
+                    owed_amounts[remainder_target] = round(owed_amounts[remainder_target] + diff, 2)
             else:
                 assigned_ids = bill_assigned_ids
                 n = len(assigned_ids)
