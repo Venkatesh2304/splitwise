@@ -192,7 +192,8 @@ export function calculateItemBreakdown(exp, members = [], myUserId = null) {
     if (isBillLevel) {
       badgeText = 'Bill Split';
     } else if (mode === 'PERSONAL') {
-      const pName = buyerObj && typeof buyerObj === 'object' && buyerObj.name ? buyerObj.name.split(' ')[0] : 'Self';
+      const assignedUser = members.find(m => m.id === (listedIds[0] || personalFallbackId));
+      const pName = assignedUser ? (assignedUser.name || '').split(' ')[0] : (buyerObj && typeof buyerObj === 'object' && buyerObj.name ? buyerObj.name.split(' ')[0] : 'Self');
       badgeText = `Personal (${pName})`;
     } else if (mode === 'SPECIFIC' || (assigned.length > 0 && assigned.length < fallbackIds.length)) {
       badgeText = `Chosen (${assignedNames.length > 0 ? assignedNames.join(', ') : `${assigned.length} members`})`;

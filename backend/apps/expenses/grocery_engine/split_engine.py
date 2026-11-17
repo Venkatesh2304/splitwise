@@ -163,16 +163,24 @@ def existing_split_for(order_id, platform_name=None) -> Optional[Dict[str, Any]]
 
     split_mode_val = "ITEMIZED"
     items_saved = []
+    bill_split_saved = None
     if isinstance(parsed_notes, dict):
         split_mode_val = parsed_notes.get("split_mode", "ITEMIZED")
         items_saved = parsed_notes.get("items", [])
+        bill_split_saved = parsed_notes.get("bill_split")
     elif isinstance(parsed_notes, list):
         items_saved = parsed_notes
+
+    payer = existing_exp.payers.first()
+    buyer_id = payer.user_id if payer else (existing_exp.created_by_id if existing_exp.created_by else None)
 
     return {
         "expense_id": existing_exp.id,
         "split_mode": split_mode_val,
-        "notes_items": items_saved
+        "notes_items": items_saved,
+        "buyer_id": buyer_id,
+        "description": existing_exp.description,
+        "bill_split": bill_split_saved
     }
 
 
@@ -328,7 +336,8 @@ class GrocerySplitEngine:
             "order_id": str(order_id),
             "split_mode": split_mode,
             "placed_at": placed_at_str,
-            "items": products_json_list
+            "items": products_json_list,
+            "bill_split": bill_split_data or {}
         }
         notes_str = json.dumps(notes_dict)
 

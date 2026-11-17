@@ -23,9 +23,9 @@ export default function ItemizedSplitModal({
     return deriveOrderTitle(platName, items, order?.order_id);
   }, [isSwiggy, order]);
 
-  const [splitMode, setSplitMode] = useState('BILL_LEVEL'); // 'BILL_LEVEL' | 'ITEMIZED'
-  const [customTitle, setCustomTitle] = useState('');
-  const [buyerId, setBuyerId] = useState(currentUser ? currentUser.id : null);
+  const [splitMode, setSplitMode] = useState(order?.existing_split?.split_mode || 'BILL_LEVEL'); // 'BILL_LEVEL' | 'ITEMIZED'
+  const [customTitle, setCustomTitle] = useState(order?.existing_split?.description || '');
+  const [buyerId, setBuyerId] = useState(order?.existing_split?.buyer_id || (currentUser ? currentUser.id : null));
   
   // Tab 1: Bill Level Options ('ALL' | 'CHOOSE' | 'CUSTOM' | 'SHARES')
   const [billSubMode, setBillSubMode] = useState('ALL');
@@ -46,30 +46,143 @@ export default function ItemizedSplitModal({
   const allMemberIds = effectiveGroupMembers.map(m => m.id);
   const totalAmount = parseFloat(order ? order.total_amount : 0) || 0.0;
 
+  const activeBuyerId = buyerId || (order?.existing_split?.buyer_id) || (currentUser ? currentUser.id : (groupMembers[0]?.id || 1));
+  const activeSelfId = currentUser ? currentUser.id : activeBuyerId;
+
   useEffect(() => {
-    if (groupMembers.length > 0 && !buyerId) {
+    if (!order) return;
+
+    const existing = order.existing_split;
+    const existingItems = existing ? existing.notes_items || [] : [];
+    const sourceItems = (order.item_details && order.item_details.length > 0)
+      ? order.item_details
+      : existingItems;
+
+    // 1. Restore Split Mode
+    if (existing && existing.split_mode) {
+      setSplitMode(existing.split_mode);
+    } else {
+      setSplitMode('BILL_LEVEL');
+    }
+
+    // 2. Restore Buyer / Payer
+    if (existing && existing.buyer_id) {
+      setBuyerId(existing.buyer_id);
+    } else if (currentUser && groupMembers.some(m => m.id === currentUser.id)) {
+      setBuyerId(currentUser.id);
+    } else if (groupMembers.length > 0) {
       setBuyerId(groupMembers[0].id);
     }
-    setBillAssignedMemberIds(allMemberIds);
 
-    // Initialize custom bill amounts equal split defaults (rounded whole rupees, no decimals)
-    const initialAmounts = {};
-    const equalShare = allMemberIds.length > 0 ? Math.round(totalAmount / allMemberIds.length).toString() : '0';
-    allMemberIds.forEach(id => { initialAmounts[id] = equalShare; });
-    setCustomBillAmounts(initialAmounts);
+    // 3. Restore Title
+    if (existing && existing.description) {
+      setCustomTitle(existing.description);
+    } else {
+      setCustomTitle('');
+    }
 
-    // Initialize custom bill shares with 1 share per member
-    const initialShares = {};
-    allMemberIds.forEach(id => { initialShares[id] = 1; });
-    setCustomBillShares(initialShares);
+    // 4. Restore Inactive config
+    if (existing && existing.bill_split && existing.bill_split.include_inactive !== undefined) {
+      setIncludeInactive(Boolean(existing.bill_split.include_inactive));
+    }
 
-    if (order && order.item_details && order.item_details.length > 0) {
-      const existingItems = order.existing_split ? order.existing_split.notes_items || [] : [];
+    // 5. Restore Bill Split Settings if any
+    if (existing && existing.bill_split) {
+      const bs = existing.bill_split;
+      if (bs.type) setBillSubMode(bs.type);
+      if (Array.isArray(bs.member_ids) && bs.member_ids.length > 0) setBillAssignedMemberIds(bs.member_ids);
+      if (bs.custom_amounts) setCustomBillAmounts(bs.custom_amounts);
+      if (bs.shares) setCustomBillShares(bs.shares);
+    } else {
+      setBillAssignedMemberIds(allMemberIds);
+      const initialAmounts = {};
+      const equalShare = allMemberIds.length > 0 ? Math.round(totalAmount / allMemberIds.length).toString() : '0';
+      allMemberIds.forEach(id => { initialAmounts[id] = equalShare; });
+      setCustomBillAmounts(initialAmounts);
 
-      const initialItems = order.item_details.map((item, idx) => {
-        const matchingSaved = existingItems.find(saved => saved.name === item.name || saved.id === item.id);
-        const splitType = matchingSaved ? matchingSaved.split_type || 'ALL' : 'ALL';
-        const assignedIds = matchingSaved && matchingSaved.assigned_member_ids ? matchingSaved.assigned_member_ids : allMemberIds;
+      const initialShares = {};
+      allMemberIds.forEach(id => { initialShares[id] = 1; });
+      setCustomBillShares(initialShares);
+    }
+
+    // 6. Restore Items
+    if (existingItems.length > 0 && (!order.item_details || order.item_details.length === 0)) {
+      const initialItems = existingItems.map((item, idx) => {
+        const assigned = (Array.isArray(item.assigned_member_ids) && item.assigned_member_ids.length > 0)
+          ? item.assigned_member_ids
+          : (Array.isArray(item.assigned_ids) && item.assigned_ids.length > 0 ? item.assigned_ids : allMemberIds);
+        const splitType = item.split_type || (assigned.length === 1 ? 'PERSONAL' : (assigned.length < allMemberIds.length ? 'SPECIFIC' : 'ALL'));
+        return {
+          id: idx,
+          name: item.name,
+          price: parseFloat(item.price) || 0,
+          quantity: item.quantity || 1,
+          split_type: splitType,
+          assigned_ids: assigned
+        };
+      });
+      setItemsState(initialItems);
+    } else if (sourceItems.length > 0) {
+      const usedExistingIndices = new Set();
+
+      const initialItems = sourceItems.map((item, idx) => {
+        let matchingSaved = null;
+
+        // Try exact index match if length and name match
+        if (existingItems[idx] && !usedExistingIndices.has(idx)) {
+          const sName = (existingItems[idx].name || '').trim().toLowerCase();
+          const iName = (item.name || '').trim().toLowerCase();
+          if (sName === iName) {
+            matchingSaved = existingItems[idx];
+            usedExistingIndices.add(idx);
+          }
+        }
+
+        // Try match by normalized name
+        if (!matchingSaved) {
+          const iName = (item.name || '').trim().toLowerCase();
+          for (let eIdx = 0; eIdx < existingItems.length; eIdx++) {
+            if (usedExistingIndices.has(eIdx)) continue;
+            const sName = (existingItems[eIdx].name || '').trim().toLowerCase();
+            if (sName === iName) {
+              matchingSaved = existingItems[eIdx];
+              usedExistingIndices.add(eIdx);
+              break;
+            }
+          }
+        }
+
+        // Try match by substring / keyword
+        if (!matchingSaved) {
+          const iName = (item.name || '').trim().toLowerCase();
+          for (let eIdx = 0; eIdx < existingItems.length; eIdx++) {
+            if (usedExistingIndices.has(eIdx)) continue;
+            const sName = (existingItems[eIdx].name || '').trim().toLowerCase();
+            if (sName.includes(iName) || iName.includes(sName)) {
+              matchingSaved = existingItems[eIdx];
+              usedExistingIndices.add(eIdx);
+              break;
+            }
+          }
+        }
+
+        // Try match by position if count matches
+        if (!matchingSaved && existingItems.length === sourceItems.length && !usedExistingIndices.has(idx)) {
+          matchingSaved = existingItems[idx];
+          usedExistingIndices.add(idx);
+        }
+
+        let assigned = allMemberIds;
+        let splitType = 'ALL';
+
+        if (matchingSaved) {
+          if (Array.isArray(matchingSaved.assigned_member_ids) && matchingSaved.assigned_member_ids.length > 0) {
+            assigned = matchingSaved.assigned_member_ids;
+          } else if (Array.isArray(matchingSaved.assigned_ids) && matchingSaved.assigned_ids.length > 0) {
+            assigned = matchingSaved.assigned_ids;
+          }
+          splitType = matchingSaved.split_type || (assigned.length === 1 ? 'PERSONAL' : (assigned.length < allMemberIds.length ? 'SPECIFIC' : 'ALL'));
+        }
 
         return {
           id: idx,
@@ -77,12 +190,12 @@ export default function ItemizedSplitModal({
           price: parseFloat(item.price) || 0,
           quantity: item.quantity || 1,
           split_type: splitType,
-          assigned_ids: assignedIds
+          assigned_ids: assigned
         };
       });
       setItemsState(initialItems);
     }
-  }, [order, groceriesGroup, includeInactive]);
+  }, [order?.order_id, order?.existing_split?.expense_id, groceriesGroup?.id]);
 
   if (!isOpen || !order || !groceriesGroup) return null;
 
@@ -99,15 +212,15 @@ export default function ItemizedSplitModal({
     setCustomBillAmounts({ ...customBillAmounts, [memberId]: value });
   };
 
-  const activeSelfId = currentUser ? currentUser.id : (buyerId || allMemberIds[0]);
-
   const setItemMode = (index, mode) => {
     const updated = [...itemsState];
     updated[index].split_type = mode;
     if (mode === 'ALL') {
       updated[index].assigned_ids = allMemberIds;
     } else if (mode === 'PERSONAL') {
-      updated[index].assigned_ids = [activeSelfId];
+      if (!Array.isArray(updated[index].assigned_ids) || updated[index].assigned_ids.length !== 1) {
+        updated[index].assigned_ids = [activeSelfId];
+      }
     } else if (mode === 'SPECIFIC') {
       if (!updated[index].assigned_ids || updated[index].assigned_ids.length === 0) {
         updated[index].assigned_ids = allMemberIds;
@@ -128,21 +241,35 @@ export default function ItemizedSplitModal({
     setItemsState(updated);
   };
 
+  const getPersonalButtonLabel = (item) => {
+    if (item.split_type === 'PERSONAL' && Array.isArray(item.assigned_ids) && item.assigned_ids.length === 1) {
+      const pid = item.assigned_ids[0];
+      if (currentUser && pid === currentUser.id) return 'Personal (You)';
+      const m = groupMembers.find(mem => mem.id === pid);
+      if (m) return `Personal (${m.name.split(' ')[0]})`;
+    }
+    return 'Personal (Self)';
+  };
+
   const round2 = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
   const max1 = (n) => Math.max(1, n);
 
-  const activeBuyerId = buyerId || (currentUser ? currentUser.id : allMemberIds[0]);
-
-  const itemList = itemsState.map(i => ({
-    name: i.name,
-    price: parseFloat(i.price) || 0,
-    split_type: i.split_type,
-    assigned_ids: i.split_type === 'ALL'
-      ? allMemberIds
-      : i.split_type === 'PERSONAL'
-        ? [activeBuyerId]
-        : (Array.isArray(i.assigned_ids) && i.assigned_ids.length > 0 ? i.assigned_ids : allMemberIds)
-  }));
+  const itemList = itemsState.map(i => {
+    let assigned = allMemberIds;
+    if (i.split_type === 'ALL') {
+      assigned = allMemberIds;
+    } else if (Array.isArray(i.assigned_ids) && i.assigned_ids.length > 0) {
+      assigned = i.assigned_ids;
+    } else if (i.split_type === 'PERSONAL') {
+      assigned = [activeSelfId];
+    }
+    return {
+      name: i.name,
+      price: parseFloat(i.price) || 0,
+      split_type: i.split_type,
+      assigned_ids: assigned
+    };
+  });
 
   const sumOfProducts = itemList.reduce((acc, i) => acc + i.price, 0);
   const explicitOtherCharges = parseFloat(order?.other_charges || 0);
@@ -151,7 +278,7 @@ export default function ItemizedSplitModal({
     : Math.max(0, round2(totalAmount - sumOfProducts));
 
   const computedFinalOwedMap = {};
-  allMemberIds.forEach(id => { computedFinalOwedMap[id] = 0.0; });
+  groupMembers.forEach(m => { computedFinalOwedMap[m.id] = 0.0; });
 
   if (splitMode === 'BILL_LEVEL') {
     if (billSubMode === 'ALL') {
@@ -200,10 +327,10 @@ export default function ItemizedSplitModal({
     }
   } else {
     const tempProductSubtotals = {};
-    allMemberIds.forEach(id => { tempProductSubtotals[id] = 0.0; });
+    groupMembers.forEach(m => { tempProductSubtotals[m.id] = 0.0; });
 
     itemList.forEach(item => {
-      const assigned = item.assigned_ids.length > 0 ? item.assigned_ids : allMemberIds;
+      const assigned = (item.assigned_ids && item.assigned_ids.length > 0) ? item.assigned_ids : allMemberIds;
       const share = item.price / max1(assigned.length);
       assigned.forEach(id => {
         if (tempProductSubtotals[id] !== undefined) {
@@ -225,11 +352,11 @@ export default function ItemizedSplitModal({
     } else {
       const netAdjustment = totalAmount - totalSubtotalsSum;
       let calcSum = 0;
-      allMemberIds.forEach(id => {
-        const sub = tempProductSubtotals[id];
-        const adjShare = (sub / totalSubtotalsSum) * netAdjustment;
+      groupMembers.forEach(m => {
+        const sub = tempProductSubtotals[m.id] || 0.0;
+        const adjShare = sub > 0 ? (sub / totalSubtotalsSum) * netAdjustment : 0.0;
         const finalVal = Math.max(0, round2(sub + adjShare));
-        computedFinalOwedMap[id] = finalVal;
+        computedFinalOwedMap[m.id] = finalVal;
         calcSum = round2(calcSum + finalVal);
       });
 
@@ -271,10 +398,8 @@ export default function ItemizedSplitModal({
           name: i.name,
           price: parseFloat(i.price) || 0,
           split_type: i.split_type,
-          assigned_member_ids: i.split_type === 'ALL'
-            ? allMemberIds
-            : (Array.isArray(i.assigned_ids) && i.assigned_ids.length > 0 ? i.assigned_ids : allMemberIds),
-          assigned_names: groupMembers.filter(m => (i.split_type === 'ALL' ? allMemberIds : (i.assigned_ids || [])).includes(m.id)).map(m => m.name.split(' ')[0])
+          assigned_member_ids: i.assigned_ids,
+          assigned_names: groupMembers.filter(m => i.assigned_ids.includes(m.id)).map(m => m.name.split(' ')[0])
         }))
       };
 
@@ -364,6 +489,34 @@ export default function ItemizedSplitModal({
             </div>
           </div>
 
+          {/* Option to include/exclude inactive members if any exist */}
+          {inactiveMembers.length > 0 && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0.45rem 0.75rem',
+              backgroundColor: 'rgba(30, 41, 59, 0.5)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-sm)',
+              marginBottom: '0.85rem',
+              fontSize: '0.75rem'
+            }}>
+              <span style={{ color: 'var(--text-muted)' }}>
+                {inactiveMembers.length} inactive member{inactiveMembers.length > 1 ? 's' : ''} in group ({inactiveMembers.map(m => m.name.split(' ')[0]).join(', ')})
+              </span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer', color: '#ffffff', fontWeight: 600 }}>
+                <input
+                  type="checkbox"
+                  checked={includeInactive}
+                  onChange={(e) => setIncludeInactive(e.target.checked)}
+                  style={{ cursor: 'pointer', accentColor: 'var(--accent-primary)' }}
+                />
+                Include inactive
+              </label>
+            </div>
+          )}
+
           {/* 2 Main Split Tabs: Tab 1 (Bill Level Split) vs Tab 2 (Product Level Split) */}
           <div className="tab-group" style={{ marginBottom: '1rem' }}>
             <button
@@ -386,33 +539,6 @@ export default function ItemizedSplitModal({
           {/* TAB 1: BILL LEVEL SPLIT OPTIONS */}
           {splitMode === 'BILL_LEVEL' && (
             <div>
-              {/* Option to include/exclude inactive members if any exist */}
-              {inactiveMembers.length > 0 && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '0.45rem 0.65rem',
-                  backgroundColor: 'rgba(30, 41, 59, 0.5)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-sm)',
-                  marginBottom: '0.75rem',
-                  fontSize: '0.75rem'
-                }}>
-                  <span style={{ color: 'var(--text-muted)' }}>
-                    {inactiveMembers.length} inactive member{inactiveMembers.length > 1 ? 's' : ''} in group ({inactiveMembers.map(m => m.name.split(' ')[0]).join(', ')})
-                  </span>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', cursor: 'pointer', color: '#ffffff', fontWeight: 600 }}>
-                    <input
-                      type="checkbox"
-                      checked={includeInactive}
-                      onChange={(e) => setIncludeInactive(e.target.checked)}
-                      style={{ cursor: 'pointer', accentColor: 'var(--accent-primary)' }}
-                    />
-                    Include inactive
-                  </label>
-                </div>
-              )}
 
               {/* Sub-modes: Equal (Everyone), Choose People, By Shares, Custom Values */}
               <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.85rem' }}>
@@ -670,9 +796,49 @@ export default function ItemizedSplitModal({
                         style={{ fontSize: '0.725rem', padding: '0.2rem 0.45rem', flex: 1 }}
                       >
                         <User size={12} />
-                        <span>Personal (Self)</span>
+                        <span>{getPersonalButtonLabel(item)}</span>
                       </button>
                     </div>
+
+                    {item.split_type === 'PERSONAL' && (
+                      <div style={{
+                        padding: '0.35rem 0.55rem',
+                        backgroundColor: 'rgba(30, 41, 59, 0.6)',
+                        borderRadius: 'var(--radius-sm)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginTop: '0.35rem'
+                      }}>
+                        <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)' }}>
+                          Personal item for:
+                        </span>
+                        <select
+                          className="form-select"
+                          value={(item.assigned_ids && item.assigned_ids[0]) || activeSelfId}
+                          onChange={(e) => {
+                            const uid = parseInt(e.target.value, 10);
+                            const updated = [...itemsState];
+                            updated[idx].assigned_ids = [uid];
+                            setItemsState(updated);
+                          }}
+                          style={{
+                            padding: '0.15rem 0.45rem',
+                            fontSize: '0.75rem',
+                            height: '26px',
+                            width: 'auto',
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            color: '#ffffff'
+                          }}
+                        >
+                          {groupMembers.map(m => (
+                            <option key={m.id} value={m.id}>
+                              {m.name}{currentUser && m.id === currentUser.id ? ' (You)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
 
                     {item.split_type === 'SPECIFIC' && (
                       <div style={{
@@ -688,7 +854,7 @@ export default function ItemizedSplitModal({
                           Split this product among:
                         </span>
                         {groupMembers.map(m => {
-                          const isAssigned = (item.assigned_ids || allMemberIds).includes(m.id);
+                          const isAssigned = (Array.isArray(item.assigned_ids) && item.assigned_ids.length > 0 ? item.assigned_ids : allMemberIds).includes(m.id);
                           return (
                             <button
                               key={m.id}
