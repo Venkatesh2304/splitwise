@@ -37,7 +37,7 @@ if [ "$(sqlite3 "$tmp" 'PRAGMA integrity_check;')" != "ok" ]; then
   exit 1
 fi
 # The database holds session tokens, so it is not world-readable. The group
-# (ubuntu) is what lets the Mac pull it over ssh.
+# (ubuntu) is what lets the ubuntu login read it.
 chmod 640 "$tmp"
 mv "$tmp" "$DEST/splitwise-$KIND-$STAMP.db"
 trap - EXIT
