@@ -129,6 +129,16 @@ export function calculateItemBreakdown(exp, members = [], myUserId = null) {
     };
   }
 
+  let notesObj = null;
+  if (exp.notes) {
+    try {
+      notesObj = typeof exp.notes === 'string' ? JSON.parse(exp.notes) : exp.notes;
+    } catch (e) {
+      notesObj = null;
+    }
+  }
+  const isBillLevel = notesObj?.split_mode === 'BILL_LEVEL' || exp.split_type === 'EQUAL' || exp.split_type === 'PERCENT';
+
   const allMemberIds = members.map(m => m.id);
   const fallbackIds = allMemberIds.length > 0
     ? allMemberIds
@@ -137,6 +147,10 @@ export function calculateItemBreakdown(exp, members = [], myUserId = null) {
   const buyerObj = exp.created_by;
   const buyerId = buyerObj ? (typeof buyerObj === 'object' ? buyerObj.id : buyerObj) : null;
   const personalFallbackId = buyerId || (fallbackIds.length > 0 ? fallbackIds[0] : null);
+
+  const expAmount = parseFloat(exp.amount) || 0;
+  const myShareObj = (exp.shares || []).find(s => (s.user?.id || s.user_id) === Number(myUserId));
+  const myOwed = myShareObj ? parseFloat(myShareObj.amount_owed || myShareObj.amount || 0) : 0;
 
   let totalProductsValue = 0;
   let mySubtotalProducts = 0;
@@ -157,8 +171,16 @@ export function calculateItemBreakdown(exp, members = [], myUserId = null) {
       assigned = listedIds.length > 0 ? listedIds : fallbackIds;
     }
 
-    const isAssignedToMe = myUserId ? assigned.map(Number).includes(Number(myUserId)) : false;
-    const myProductShare = (isAssignedToMe && assigned.length > 0) ? (prodValue / assigned.length) : 0;
+    let isAssignedToMe = false;
+    let myProductShare = 0;
+
+    if (isBillLevel && expAmount > 0 && myOwed > 0) {
+      isAssignedToMe = true;
+      myProductShare = (myOwed / expAmount) * prodValue;
+    } else {
+      isAssignedToMe = myUserId ? assigned.map(Number).includes(Number(myUserId)) : false;
+      myProductShare = (isAssignedToMe && assigned.length > 0) ? (prodValue / assigned.length) : 0;
+    }
     mySubtotalProducts += myProductShare;
 
     // Names of assigned members
@@ -167,11 +189,29 @@ export function calculateItemBreakdown(exp, members = [], myUserId = null) {
       : members.filter(m => assigned.includes(m.id)).map(m => (m.name || '').split(' ')[0]);
 
     let badgeText = 'Everyone';
-    if (mode === 'PERSONAL') {
+    if (isBillLevel) {
+      badgeText = 'Bill Split';
+    } else if (mode === 'PERSONAL') {
       const pName = buyerObj && typeof buyerObj === 'object' && buyerObj.name ? buyerObj.name.split(' ')[0] : 'Self';
       badgeText = `Personal (${pName})`;
     } else if (mode === 'SPECIFIC' || (assigned.length > 0 && assigned.length < fallbackIds.length)) {
       badgeText = `Chosen (${assignedNames.length > 0 ? assignedNames.join(', ') : `${assigned.length} members`})`;
+    }
+
+    const assignedShares = {};
+    if (isBillLevel && expAmount > 0) {
+      (exp.shares || []).forEach(s => {
+        const uId = s.user?.id || s.user_id;
+        const owed = parseFloat(s.amount_owed || s.amount || 0);
+        if (uId) {
+          assignedShares[uId] = (owed / expAmount) * prodValue;
+        }
+      });
+    } else {
+      const share = assigned.length > 0 ? prodValue / assigned.length : 0;
+      assigned.forEach(id => {
+        assignedShares[id] = share;
+      });
     }
 
     return {
@@ -180,16 +220,25 @@ export function calculateItemBreakdown(exp, members = [], myUserId = null) {
       quantity: item.quantity || 1,
       assignedIds: assigned,
       assignedNames,
+      assignedShares,
       badgeText,
       myShare: myProductShare,
       isZeroShare: myProductShare === 0,
     };
   });
 
-  const expAmount = parseFloat(exp.amount) || totalProductsValue;
-  const totalCommonFees = Math.max(0, expAmount - totalProductsValue);
-  const myFeeShare = totalProductsValue > 0 ? (mySubtotalProducts / totalProductsValue) * totalCommonFees : 0;
-  const myTotalShare = mySubtotalProducts + myFeeShare;
+  const finalExpAmount = expAmount || totalProductsValue;
+  const netDifference = finalExpAmount - totalProductsValue;
+  const totalCommonFees = Math.max(0, netDifference);
+
+  let myFeeShare = 0;
+  if (totalProductsValue > 0) {
+    myFeeShare = (mySubtotalProducts / totalProductsValue) * netDifference;
+  } else if (myOwed > 0) {
+    myFeeShare = myOwed;
+  }
+
+  const myTotalShare = Math.max(0, mySubtotalProducts + myFeeShare);
 
   return {
     items: decoratedItems,

@@ -108,15 +108,57 @@ class SwiggyInstamartConnector(BaseGroceryConnector):
 
                 items = []
                 raw_items = ord.get("items", [])
-                num_items = max(1, len(raw_items))
-                avg_price = round(item_subtotal / num_items, 2)
-
+                
+                weights, names, qtys = [], [], []
                 for it in raw_items:
+                    if isinstance(it, dict):
+                        n = it.get("name") or "Instamart Item"
+                        q = int(it.get("quantity") or 1)
+                        line_p = 0.0
+                        for k in ("total", "final_price", "subtotal", "item_total", "amount", "line_total"):
+                            try:
+                                val = float(it.get(k) or 0.0)
+                            except (TypeError, ValueError):
+                                val = 0.0
+                            if val > 0:
+                                line_p = val
+                                break
+                        if line_p <= 0:
+                            for k in ("price", "unit_price", "unitPrice", "item_price", "base_price"):
+                                try:
+                                    val = float(it.get(k) or 0.0)
+                                except (TypeError, ValueError):
+                                    val = 0.0
+                                if val > 0:
+                                    line_p = val * max(1, q)
+                                    break
+                        if line_p <= 0:
+                            line_p = float(max(1, q))
+                    else:
+                        n = str(it)
+                        q = 1
+                        line_p = 1.0
+                    names.append(n)
+                    weights.append(line_p)
+                    qtys.append(q)
+
+                target_items = round(total_amt - other_charges, 2)
+                if target_items < 0:
+                    target_items = total_amt
+                    other_charges = 0.0
+
+                from apps.expenses.swiggy_views import rescale_item_lines
+                lines = rescale_item_lines(weights, target_items)
+                for n, p, q in zip(names, lines, qtys):
                     items.append(GroceryItem(
-                        name=it.get("name"),
-                        price=avg_price,
-                        quantity=int(it.get("quantity") or 1)
+                        name=n,
+                        price=p,
+                        quantity=q
                     ))
+
+                other_charges = round(total_amt - sum(it.price for it in items), 2)
+                if other_charges < 0:
+                    other_charges = 0.0
 
                 grocery_orders.append(GroceryOrder(
                     platform=self.platform_name,

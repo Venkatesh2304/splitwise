@@ -152,39 +152,23 @@ def build_grocery_summary(group=None, user_id=None, month=None):
         fallback_members = list(expense_shares.keys()) if expense_shares else list(members.keys())
         payer_id = e.created_by_id or (fallback_members[0] if fallback_members else None)
         
-        if items:
-            for it in items:
-                name = str(it.get('name') or 'Unknown').strip()
-                price = float(it.get('price') or 0.0)
-                qty = int(it.get('quantity') or 1)
-                
-                assigned_ids = resolve_assigned_ids(it, fallback_members, payer_id)
-                if not assigned_ids:
-                    assigned_ids = fallback_members
+        if target_uid is not None:
+            # Consumer summary for a specific user
+            user_exp_total = expense_shares.get(target_uid, 0.0)
+            if user_exp_total <= 0:
+                continue
+            
+            if items:
+                user_items_spend = 0.0
+                for it in items:
+                    name = str(it.get('name') or 'Unknown').strip()
+                    price = float(it.get('price') or 0.0)
+                    qty = int(it.get('quantity') or 1)
                     
-                cat = match_category(name)
-                pkw = match_product_keyword(name)
-                
-                if target_uid is None:
-                    # Total Group spend on this item
-                    itemized_spend += price
-                    total_spend += price
-                    total_items += 1
-                    itemized_orders_counted.add(e.id)
-                    
-                    cat_data[cat]['spend'] += price
-                    cat_data[cat]['quantity'] += qty
-                    cat_data[cat]['item_count'] += 1
-                    cat_data[cat]['products'][name] += qty
-                    cat_data[cat]['top_by_spend'][name] += price
-                    
-                    prod_data[pkw]['spend'] += price
-                    prod_data[pkw]['quantity'] += qty
-                    prod_data[pkw]['item_count'] += 1
-                    prod_data[pkw]['products'][name] += qty
-                    prod_data[pkw]['top_by_spend'][name] += price
-                else:
-                    # Split ON target user for this item (Consumer summary)
+                    assigned_ids = resolve_assigned_ids(it, fallback_members, payer_id)
+                    if not assigned_ids:
+                        assigned_ids = fallback_members
+
                     if target_uid in assigned_ids:
                         user_share = price / len(assigned_ids)
                         user_qty = round(qty / len(assigned_ids), 2)
@@ -193,6 +177,10 @@ def build_grocery_summary(group=None, user_id=None, month=None):
                         total_spend += user_share
                         total_items += 1
                         itemized_orders_counted.add(e.id)
+                        user_items_spend += user_share
+                        
+                        cat = match_category(name)
+                        pkw = match_product_keyword(name)
                         
                         cat_data[cat]['spend'] += user_share
                         cat_data[cat]['quantity'] += user_qty
@@ -205,33 +193,120 @@ def build_grocery_summary(group=None, user_id=None, month=None):
                         prod_data[pkw]['item_count'] += 1
                         prod_data[pkw]['products'][name] += user_qty
                         prod_data[pkw]['top_by_spend'][name] += user_share
-        else:
-            # Non-itemized expense (e.g. Equal, Exact, Percentage, or general bill)
-            if target_uid is None:
-                exp_spend = float(e.amount)
+
+                # Allocate any remaining owed amount (fees, taxes, platform charges, unassigned remainder)
+                user_fee_spend = round(user_exp_total - user_items_spend, 2)
+                if user_fee_spend > 0:
+                    non_itemized_spend += user_fee_spend
+                    total_spend += user_fee_spend
+                    non_itemized_orders_counted.add(e.id)
+                    
+                    entry_label = 'Delivery, Taxes & Other Charges'
+                    desc = (e.description or '').strip() or 'Order Fees & Taxes'
+                    
+                    cat_data[entry_label]['spend'] += user_fee_spend
+                    cat_data[entry_label]['quantity'] += 1
+                    cat_data[entry_label]['item_count'] += 1
+                    cat_data[entry_label]['products'][desc] += 1
+                    cat_data[entry_label]['top_by_spend'][desc] += user_fee_spend
+                    
+                    prod_data[entry_label]['spend'] += user_fee_spend
+                    prod_data[entry_label]['quantity'] += 1
+                    prod_data[entry_label]['item_count'] += 1
+                    prod_data[entry_label]['products'][desc] += 1
+                    prod_data[entry_label]['top_by_spend'][desc] += user_fee_spend
             else:
-                exp_spend = expense_shares.get(target_uid, 0.0)
-                
-            if exp_spend > 0 or target_uid is None:
-                non_itemized_spend += exp_spend
-                total_spend += exp_spend
+                # Non-itemized expense
+                non_itemized_spend += user_exp_total
+                total_spend += user_exp_total
                 total_items += 1
                 non_itemized_orders_counted.add(e.id)
                 
                 entry_label = 'Non-Itemized Spends'
                 desc = (e.description or '').strip() or 'General Expense'
                 
-                cat_data[entry_label]['spend'] += exp_spend
+                cat_data[entry_label]['spend'] += user_exp_total
                 cat_data[entry_label]['quantity'] += 1
                 cat_data[entry_label]['item_count'] += 1
                 cat_data[entry_label]['products'][desc] += 1
-                cat_data[entry_label]['top_by_spend'][desc] += exp_spend
+                cat_data[entry_label]['top_by_spend'][desc] += user_exp_total
                 
-                prod_data[entry_label]['spend'] += exp_spend
+                prod_data[entry_label]['spend'] += user_exp_total
                 prod_data[entry_label]['quantity'] += 1
                 prod_data[entry_label]['item_count'] += 1
                 prod_data[entry_label]['products'][desc] += 1
-                prod_data[entry_label]['top_by_spend'][desc] += exp_spend
+                prod_data[entry_label]['top_by_spend'][desc] += user_exp_total
+        else:
+            # Group total summary
+            exp_total = float(e.amount)
+            if items:
+                order_items_spend = 0.0
+                for it in items:
+                    name = str(it.get('name') or 'Unknown').strip()
+                    price = float(it.get('price') or 0.0)
+                    qty = int(it.get('quantity') or 1)
+                    
+                    itemized_spend += price
+                    total_spend += price
+                    total_items += 1
+                    itemized_orders_counted.add(e.id)
+                    order_items_spend += price
+                    
+                    cat = match_category(name)
+                    pkw = match_product_keyword(name)
+                    
+                    cat_data[cat]['spend'] += price
+                    cat_data[cat]['quantity'] += qty
+                    cat_data[cat]['item_count'] += 1
+                    cat_data[cat]['products'][name] += qty
+                    cat_data[cat]['top_by_spend'][name] += price
+                    
+                    prod_data[pkw]['spend'] += price
+                    prod_data[pkw]['quantity'] += qty
+                    prod_data[pkw]['item_count'] += 1
+                    prod_data[pkw]['products'][name] += qty
+                    prod_data[pkw]['top_by_spend'][name] += price
+                
+                order_fee_spend = round(exp_total - order_items_spend, 2)
+                if order_fee_spend > 0:
+                    non_itemized_spend += order_fee_spend
+                    total_spend += order_fee_spend
+                    non_itemized_orders_counted.add(e.id)
+                    
+                    entry_label = 'Delivery, Taxes & Other Charges'
+                    desc = (e.description or '').strip() or 'Order Fees & Taxes'
+                    
+                    cat_data[entry_label]['spend'] += order_fee_spend
+                    cat_data[entry_label]['quantity'] += 1
+                    cat_data[entry_label]['item_count'] += 1
+                    cat_data[entry_label]['products'][desc] += 1
+                    cat_data[entry_label]['top_by_spend'][desc] += order_fee_spend
+                    
+                    prod_data[entry_label]['spend'] += order_fee_spend
+                    prod_data[entry_label]['quantity'] += 1
+                    prod_data[entry_label]['item_count'] += 1
+                    prod_data[entry_label]['products'][desc] += 1
+                    prod_data[entry_label]['top_by_spend'][desc] += order_fee_spend
+            else:
+                non_itemized_spend += exp_total
+                total_spend += exp_total
+                total_items += 1
+                non_itemized_orders_counted.add(e.id)
+                
+                entry_label = 'Non-Itemized Spends'
+                desc = (e.description or '').strip() or 'General Expense'
+                
+                cat_data[entry_label]['spend'] += exp_total
+                cat_data[entry_label]['quantity'] += 1
+                cat_data[entry_label]['item_count'] += 1
+                cat_data[entry_label]['products'][desc] += 1
+                cat_data[entry_label]['top_by_spend'][desc] += exp_total
+                
+                prod_data[entry_label]['spend'] += exp_total
+                prod_data[entry_label]['quantity'] += 1
+                prod_data[entry_label]['item_count'] += 1
+                prod_data[entry_label]['products'][desc] += 1
+                prod_data[entry_label]['top_by_spend'][desc] += exp_total
 
     # Format Category Results
     categories = []

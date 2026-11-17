@@ -138,10 +138,15 @@ class OrderStoreManager:
                         rec.placed_at = placed_at
                         updated = True
 
-                if item_details and (not rec.item_details or len(rec.item_details) < len(item_details)):
-                    rec.item_details = item_details
-                    rec.product_names = prod_names or rec.product_names
-                    updated = True
+                if item_details:
+                    old_sum = sum(float(i.get("price") or 0.0) for i in (rec.item_details or []))
+                    new_sum = sum(float(i.get("price") or 0.0) for i in item_details)
+                    if (not rec.item_details
+                        or len(rec.item_details) < len(item_details)
+                        or abs(old_sum - new_sum) > 0.01):
+                        rec.item_details = item_details
+                        rec.product_names = prod_names or rec.product_names
+                        updated = True
 
                 if total_amt > 0 and (rec.total_amount == 0 or abs(rec.total_amount - total_amt) > 0.01):
                     rec.total_amount = total_amt

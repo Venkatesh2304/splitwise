@@ -381,9 +381,9 @@ def rescale_item_lines(weights, target_sum):
 
 def _food_line_weight(item):
     """What one order line cost, before the bill-level reconciliation."""
-    qty = int(item.get("quantity") or 1)
+    qty = max(1, int(item.get("quantity") or 1))
     base = 0.0
-    for key in ("total", "final_price", "subtotal"):
+    for key in ("total", "final_price", "subtotal", "item_total", "amount", "line_total"):
         try:
             val = float(item.get(key) or 0.0)
         except (TypeError, ValueError):
@@ -392,21 +392,25 @@ def _food_line_weight(item):
             base = val
             break
     if base <= 0:
-        try:
-            base = float(item.get("base_price") or 0.0) * max(1, qty)
-        except (TypeError, ValueError):
-            base = 0.0
+        for key in ("base_price", "unit_price", "price", "item_price"):
+            try:
+                val = float(item.get(key) or 0.0)
+            except (TypeError, ValueError):
+                val = 0.0
+            if val > 0:
+                base = val * qty
+                break
 
     extras = 0.0
     for group in ("variants", "addons"):
         for sub in (item.get(group) or []):
             if isinstance(sub, dict):
                 try:
-                    extras += float(sub.get("price") or 0.0)
+                    extras += float(sub.get("price") or sub.get("final_price") or 0.0) * qty
                 except (TypeError, ValueError):
                     pass
     try:
-        extras += float(item.get("packing_charges") or 0.0)
+        extras += float(item.get("packing_charges") or item.get("packing_charge") or 0.0)
     except (TypeError, ValueError):
         pass
     return max(0.0, base + extras)
@@ -477,12 +481,33 @@ def parse_swiggy_food_orders(orders_payload, details_by_id=None):
 
         # Fees the diner pays on top of the food itself. Deliberately not including
         # discounts here: those are spread across the items by the rescale below.
-        charges = max(0.0, round(_num("order_tax") + _num("order_delivery_charge"), 2))
+        fee_keys = (
+            "order_tax", "tax", "gst",
+            "order_delivery_charge", "delivery_charge", "delivery_fee",
+            "restaurant_packing_charges", "packaging_charge", "packing_charge", "packing_fee",
+            "platform_fee", "convenience_fee",
+            "delivery_tip", "tip", "order_tip",
+        )
+        bill_details = detail.get("billDetails") or detail.get("bill_details") or {}
+        explicit_charges = 0.0
+        for k in fee_keys:
+            val = _num(k)
+            if val <= 0 and isinstance(bill_details, dict):
+                try:
+                    val = float(bill_details.get(k) or 0.0)
+                except (TypeError, ValueError):
+                    val = 0.0
+            explicit_charges += max(0.0, val)
+
+        charges = max(0.0, round(explicit_charges, 2))
         if charges > total_amount:
             charges = 0.0
 
         if names:
             target = round(total_amount - charges, 2)
+            if target < 0:
+                target = total_amount
+                charges = 0.0
             lines = rescale_item_lines(weights, target)
             item_details = [
                 {"name": n, "price": p, "quantity": q}
@@ -550,10 +575,13 @@ def parse_swiggy_orders_json(resp_json, headers=None):
         placed_clean = clean_placed_at(status_raw, created_at_raw=created_raw)
 
         items_raw = ord_item.get("order_items") or ord_item.get("items") or []
-        item_total = float(bill.get("itemTotal") or bill.get("item_total") or tot_amt)
+        bill_item_total = float(bill.get("itemTotal") or bill.get("item_total") or 0.0)
         
-        prod_names = []
-        item_details = []
+        # Real other charges (handling/delivery) = grandTotal - itemTotal if itemTotal is valid
+        if 0 < bill_item_total <= tot_amt:
+            other_chg = max(0.0, round(tot_amt - bill_item_total, 2))
+        else:
+            other_chg = 0.0
         
         # Try fetching real per-item prices from track_order if headers are available
         track_items = []
@@ -574,8 +602,7 @@ def parse_swiggy_orders_json(resp_json, headers=None):
             except Exception as e:
                 print(f"track_order price fetch skipped for {ord_id}: {e}")
 
-        # Real other charges (handling/delivery) = grandTotal - itemTotal
-        other_chg = max(0.0, round(tot_amt - item_total, 2))
+        names, weights, quantities = [], [], []
 
         if track_items:
             sum_t = 0.0
@@ -593,9 +620,9 @@ def parse_swiggy_orders_json(resp_json, headers=None):
                 raw_p = str(ti.get("price") or "0")
                 p_val = float(re.sub(r'[^\d.]', '', raw_p) or 0.0)
                 
-                prod_names.append(clean_n)
-                # Store total line price for all units directly on price
-                item_details.append({"name": clean_n, "price": p_val, "quantity": q})
+                names.append(clean_n)
+                weights.append(p_val)
+                quantities.append(q)
                 sum_t += p_val
                 tracked_names.append(clean_n.lower())
 
@@ -608,47 +635,76 @@ def parse_swiggy_orders_json(resp_json, headers=None):
                     missing_items.append((g_name, g_qty))
 
             if missing_items:
-                rem_amt = max(0.0, round(item_total - sum_t, 2))
+                rem_amt = max(0.0, round((bill_item_total or tot_amt) - sum_t, 2))
                 tot_missing_count = len(missing_items)
                 for m_name, m_q in missing_items:
-                    m_line_price = round(rem_amt / tot_missing_count, 2)
-                    prod_names.append(m_name)
-                    item_details.append({"name": m_name, "price": m_line_price, "quantity": m_q})
+                    m_weight = round(rem_amt / tot_missing_count, 2)
+                    names.append(m_name)
+                    weights.append(m_weight)
+                    quantities.append(m_q)
         else:
-            has_explicit = any(float(it.get("price") or it.get("unit_price") or it.get("unitPrice") or it.get("item_price") or 0.0) > 0 for it in items_raw if isinstance(it, dict))
+            dict_items = [it for it in items_raw if isinstance(it, dict)]
+            if not dict_items:
+                dict_items = [{"name": str(it), "quantity": 1} for it in items_raw]
 
-            if has_explicit:
-                for it in items_raw:
-                    if isinstance(it, dict):
-                        p_name = it.get("name") or "Instamart Item"
-                        p_qty = int(it.get("quantity") or 1)
-                        p_price = float(it.get("price") or it.get("unit_price") or it.get("unitPrice") or it.get("item_price") or 0.0)
-                        prod_names.append(p_name)
-                        item_details.append({"name": p_name, "price": p_price, "quantity": p_qty})
-            else:
-                dict_items = [it for it in items_raw if isinstance(it, dict)]
-                if not dict_items:
-                    dict_items = [{"name": str(it), "quantity": 1} for it in items_raw]
-
-                total_qty = sum(int(it.get("quantity") or 1) for it in dict_items)
-                if total_qty == 0: total_qty = max(1, len(dict_items))
+            for it in dict_items:
+                p_name = it.get("name") or "Instamart Item"
+                p_qty = int(it.get("quantity") or 1)
                 
-                avg_price = round(item_total / total_qty, 2)
-                sum_prod = 0.0
+                # Check line total keys first
+                p_weight = 0.0
+                for k in ("total", "final_price", "subtotal", "item_total", "amount", "line_total"):
+                    try:
+                        val = float(it.get(k) or 0.0)
+                    except (TypeError, ValueError):
+                        val = 0.0
+                    if val > 0:
+                        p_weight = val
+                        break
+                
+                # Fallback to unit price * quantity
+                if p_weight <= 0:
+                    for k in ("price", "unit_price", "unitPrice", "item_price", "base_price"):
+                        try:
+                            val = float(it.get(k) or 0.0)
+                        except (TypeError, ValueError):
+                            val = 0.0
+                        if val > 0:
+                            p_weight = val * max(1, p_qty)
+                            break
+                
+                # If still no explicit price, weight by quantity
+                if p_weight <= 0:
+                    p_weight = float(max(1, p_qty))
 
-                for idx, it in enumerate(dict_items):
-                    p_name = it.get("name") or "Instamart Item"
-                    p_qty = int(it.get("quantity") or 1)
-                    
-                    if idx == len(dict_items) - 1:
-                        rem = round(item_total - sum_prod, 2)
-                        p_price = round(rem / p_qty, 2) if p_qty > 0 else 0.0
-                    else:
-                        p_price = avg_price
-                        
-                    prod_names.append(p_name)
-                    item_details.append({"name": p_name, "price": p_price, "quantity": p_qty})
-                    sum_prod += (p_price * p_qty)
+                names.append(p_name)
+                weights.append(p_weight)
+                quantities.append(p_qty)
+
+        if names:
+            if 0 < bill_item_total <= tot_amt:
+                target_items = bill_item_total
+            elif 0 < sum(weights) <= tot_amt:
+                target_items = round(sum(weights), 2)
+            else:
+                target_items = tot_amt
+
+            target_items = round(min(tot_amt, target_items), 2)
+            lines = rescale_item_lines(weights, target_items)
+            item_details = [
+                {"name": n, "price": p, "quantity": q}
+                for n, p, q in zip(names, lines, quantities)
+            ]
+            prod_names = list(names)
+        else:
+            label = "Instamart order"
+            item_details = [{"name": label, "price": round(tot_amt, 2), "quantity": 1}]
+            prod_names = [label]
+
+        # Derived last so sum(i["price"]) + other_charges == tot_amt holds strictly
+        other_chg = round(tot_amt - sum(i["price"] for i in item_details), 2)
+        if other_chg < 0:
+            other_chg = 0.0
 
         parsed_orders.append({
             "order_id": ord_id,

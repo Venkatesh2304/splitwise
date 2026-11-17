@@ -51,13 +51,27 @@ def split_items(total_amount, items, member_ids, remainder_to):
             if uid in subtotals:
                 subtotals[uid] += share
 
-    items_total = sum(float(item.get('price') or 0.0) for item in items)
-    charges = max(0.0, round(total_amount - items_total, 2))
-    subtotal_sum = sum(subtotals.values()) or 1.0
+    subtotal_sum = sum(subtotals.values())
 
+    if subtotal_sum <= 0:
+        # All items have 0 price or no members assigned.
+        # Split total_amount equally among all members.
+        n = max(1, len(member_ids))
+        equal_share = round(total_amount / n, 2)
+        for uid in member_ids:
+            owed[uid] = equal_share
+        difference = round(total_amount - sum(owed.values()), 2)
+        if difference != 0 and remainder_to in owed:
+            owed[remainder_to] = round(owed[remainder_to] + difference, 2)
+        return owed
+
+    # When subtotal_sum > 0:
+    # Any net difference (charges if positive, discount if negative)
+    # is distributed proportionally to each member's subtotal share.
+    net_adjustment = total_amount - subtotal_sum
     for uid in member_ids:
-        fee_share = (subtotals[uid] / subtotal_sum) * charges if charges > 0 else 0.0
-        owed[uid] = round(subtotals[uid] + fee_share, 2)
+        adj_share = (subtotals[uid] / subtotal_sum) * net_adjustment
+        owed[uid] = max(0.0, round(subtotals[uid] + adj_share, 2))
 
     # Whoever paid absorbs the rounding, so the shares add up to the bill
     difference = round(total_amount - sum(owed.values()), 2)

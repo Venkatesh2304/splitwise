@@ -1115,13 +1115,12 @@ export default function GroupDetailView({
                               border: '1px solid var(--border-color)',
                               borderRadius: 'var(--radius-md)',
                               fontSize: '0.825rem',
-                              opacity: item.isZeroShare ? 0.35 : 1,
-                              filter: item.isZeroShare ? 'grayscale(80%)' : 'none',
+                              opacity: item.isZeroShare ? 0.75 : 1,
                               transition: 'all 0.2s ease'
                             }}
                           >
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
-                              <div style={{ fontWeight: 700, color: item.isZeroShare ? 'var(--text-dim)' : '#ffffff' }}>
+                              <div style={{ fontWeight: 700, color: '#ffffff' }}>
                                 {item.name}
                               </div>
                               <span className="balance-tag neutral" style={{ fontSize: '0.675rem', padding: '0.15rem 0.45rem' }}>
@@ -1133,10 +1132,16 @@ export default function GroupDetailView({
                               <span>Product Value: <strong style={{ color: '#ffffff' }}>{currency}{Math.round(item.price)}</strong></span>
                               <span>
                                 My Share: <strong style={{ color: item.isZeroShare ? 'var(--text-dim)' : 'var(--accent-primary)' }}>
-                                  {currency}{Math.round(item.myShare)}
+                                  {item.isZeroShare ? `${currency}0` : `${currency}${Math.round(item.myShare)}`}
                                 </strong>
                               </span>
                             </div>
+
+                            {item.assignedNames && item.assignedNames.length > 0 && (
+                              <div style={{ fontSize: '0.725rem', color: 'var(--text-dim)', marginTop: '0.25rem' }}>
+                                Split between: {item.assignedNames.join(', ')}
+                              </div>
+                            )}
                           </div>
                         ))}
 
@@ -1155,6 +1160,22 @@ export default function GroupDetailView({
                             </div>
                           </div>
                         )}
+
+                        <div style={{
+                          padding: '0.65rem 0.85rem',
+                          backgroundColor: 'rgba(30, 41, 59, 0.6)',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: 'var(--radius-md)',
+                          fontSize: '0.825rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between'
+                        }}>
+                          <span style={{ fontWeight: 600, color: '#ffffff' }}>My Total Calculated Share</span>
+                          <strong style={{ color: 'var(--accent-primary)', fontSize: '0.9rem' }}>
+                            {currency}{Math.round(breakdown.myTotalShare)}
+                          </strong>
+                        </div>
                       </div>
                     );
                   })()}

@@ -218,10 +218,35 @@ class GrocerySplitEngine:
         owed_amounts = {m_id: 0.0 for m_id in member_ids}
 
         # Populate products_json_list for both BILL_LEVEL and ITEMIZED splits
+        if not item_splits_data and order_id:
+            from apps.expenses.models import GroceryOrderRecord
+            rec = GroceryOrderRecord.objects.filter(order_id=str(order_id)).first()
+            if rec and rec.item_details and isinstance(rec.item_details, list):
+                item_splits_data = [
+                    {
+                        "name": it.get("name"),
+                        "price": float(it.get("price", 0.0)),
+                        "split_type": "ALL",
+                        "assigned_member_ids": member_ids
+                    }
+                    for it in rec.item_details if isinstance(it, dict)
+                ]
+
+        bill_assigned_ids = member_ids
+        if bill_split_data and "member_ids" in bill_split_data:
+            valid_b_ids = [m_id for m_id in bill_split_data["member_ids"] if m_id in member_ids]
+            if valid_b_ids:
+                bill_assigned_ids = valid_b_ids
+
         products_json_list = []
         if item_splits_data:
             for it in item_splits_data:
-                assigned = it.get("assigned_member_ids", member_ids) if split_mode == "ITEMIZED" else member_ids
+                if split_mode == "BILL_LEVEL":
+                    assigned = bill_assigned_ids
+                else:
+                    assigned = it.get("assigned_member_ids")
+                    if not assigned:
+                        assigned = member_ids
                 assigned_names = [m.name.split(' ')[0] for m in all_members if m.id in assigned]
                 products_json_list.append({
                     "name": it.get("name"),
@@ -244,12 +269,7 @@ class GrocerySplitEngine:
                 if diff != 0 and buyer.id in owed_amounts:
                     owed_amounts[buyer.id] = round(owed_amounts[buyer.id] + diff, 2)
             else:
-                assigned_ids = member_ids
-                if bill_split_data and "member_ids" in bill_split_data:
-                    assigned_ids = [m_id for m_id in bill_split_data["member_ids"] if m_id in member_ids]
-                if not assigned_ids:
-                    assigned_ids = member_ids
-
+                assigned_ids = bill_assigned_ids
                 n = len(assigned_ids)
                 share_per_person = round(total_amount / n, 2)
                 for m_id in assigned_ids:
@@ -257,7 +277,8 @@ class GrocerySplitEngine:
                 
                 diff = round(total_amount - sum(owed_amounts.values()), 2)
                 if diff != 0 and assigned_ids:
-                    owed_amounts[assigned_ids[0]] = round(owed_amounts[assigned_ids[0]] + diff, 2)
+                    remainder_target = buyer.id if buyer.id in assigned_ids else assigned_ids[0]
+                    owed_amounts[remainder_target] = round(owed_amounts[remainder_target] + diff, 2)
 
         elif split_mode == "ITEMIZED":
             # Same arithmetic a hand-entered itemised expense uses

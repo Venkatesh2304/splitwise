@@ -127,7 +127,11 @@ export default function ItemizedSplitModal({
     name: i.name,
     price: parseFloat(i.price) || 0,
     split_type: i.split_type,
-    assigned_ids: i.split_type === 'ALL' ? allMemberIds : i.split_type === 'PERSONAL' ? [activeBuyerId] : (i.assigned_ids || allMemberIds)
+    assigned_ids: i.split_type === 'ALL'
+      ? allMemberIds
+      : i.split_type === 'PERSONAL'
+        ? [activeBuyerId]
+        : (Array.isArray(i.assigned_ids) && i.assigned_ids.length > 0 ? i.assigned_ids : allMemberIds)
   }));
 
   const sumOfProducts = itemList.reduce((acc, i) => acc + i.price, 0);
@@ -182,20 +186,31 @@ export default function ItemizedSplitModal({
       });
     });
 
-    const totalSubtotalsSum = Object.values(tempProductSubtotals).reduce((a, b) => a + b, 0) || 1.0;
+    const totalSubtotalsSum = Object.values(tempProductSubtotals).reduce((a, b) => a + b, 0);
 
-    let calcSum = 0;
-    allMemberIds.forEach(id => {
-      const sub = tempProductSubtotals[id];
-      const feeShare = pooledTaxesAndCharges > 0 ? (sub / totalSubtotalsSum) * pooledTaxesAndCharges : 0.0;
-      const finalVal = round2(sub + feeShare);
-      computedFinalOwedMap[id] = finalVal;
-      calcSum = round2(calcSum + finalVal);
-    });
+    if (totalSubtotalsSum <= 0) {
+      const equalShare = round2(totalAmount / max1(allMemberIds.length));
+      allMemberIds.forEach(id => { computedFinalOwedMap[id] = equalShare; });
+      const currentSum = Object.values(computedFinalOwedMap).reduce((a, b) => round2(a + b), 0);
+      const diff = round2(totalAmount - currentSum);
+      if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
+        computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
+      }
+    } else {
+      const netAdjustment = totalAmount - totalSubtotalsSum;
+      let calcSum = 0;
+      allMemberIds.forEach(id => {
+        const sub = tempProductSubtotals[id];
+        const adjShare = (sub / totalSubtotalsSum) * netAdjustment;
+        const finalVal = Math.max(0, round2(sub + adjShare));
+        computedFinalOwedMap[id] = finalVal;
+        calcSum = round2(calcSum + finalVal);
+      });
 
-    const diff = round2(totalAmount - calcSum);
-    if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
-      computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
+      const diff = round2(totalAmount - calcSum);
+      if (diff !== 0 && computedFinalOwedMap[activeBuyerId] !== undefined) {
+        computedFinalOwedMap[activeBuyerId] = round2(computedFinalOwedMap[activeBuyerId] + diff);
+      }
     }
   }
 
@@ -228,7 +243,9 @@ export default function ItemizedSplitModal({
           name: i.name,
           price: parseFloat(i.price) || 0,
           split_type: i.split_type,
-          assigned_member_ids: i.split_type === 'ALL' ? allMemberIds : i.assigned_ids,
+          assigned_member_ids: i.split_type === 'ALL'
+            ? allMemberIds
+            : (Array.isArray(i.assigned_ids) && i.assigned_ids.length > 0 ? i.assigned_ids : allMemberIds),
           assigned_names: groupMembers.filter(m => (i.split_type === 'ALL' ? allMemberIds : (i.assigned_ids || [])).includes(m.id)).map(m => m.name.split(' ')[0])
         }))
       };
